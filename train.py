@@ -267,7 +267,7 @@ def main(argv):
     test_dataloader = DataLoader(
         test_dataset,
         batch_size=args.test_batch_size,
-        num_workers=8,
+        num_workers=args.num_workers,
         shuffle=False,
         pin_memory=(device == "cuda"),
     )
@@ -284,6 +284,7 @@ def main(argv):
     print(f"Trainable parameters: {trainable_params:,}")
 
 
+    #TODO: Use more sophisticated scheduler?
     lr_scheduler = lambda x : \
     1e-4 if x < 2750 else (
         3e-5 if x < 2850 else (
