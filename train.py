@@ -17,8 +17,8 @@ from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, data_path, transform):
-        self.data_dir = data_path
+    def __init__(self, data_path, pol, transform):
+        self.data_dir = f"{data_path}/gt_{pol}"
         self.dataset_list = [f for f in os.listdir(self.data_dir) if os.path.isfile(os.path.join(self.data_dir, f))]
         self.transform = transform
 
@@ -191,8 +191,8 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example training script.")
     parser.add_argument("--model_name", type=str, default="AHT")
     parser.add_argument("--model_class", type=str, default="hypers")
-    parser.add_argument("-tr_d", "--train_dataset", type=str, default="./flicker_2W_images/train/", help="Training dataset")
-    parser.add_argument("-te_d", "--test_dataset", type=str, default="./flicker_2W_images/clic/", help="Testing dataset")
+    parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train/", help="Training dataset")
+    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation/", help="Testing dataset")
     parser.add_argument( "-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
     parser.add_argument( "-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
     parser.add_argument( "-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
@@ -235,8 +235,11 @@ def main(argv):
         torch.manual_seed(args.seed)
         random.seed(args.seed)
 
+    pol = "HH"
+
     test_dataset = Dataset(
         args.test_dataset,
+        pol,
         transform=transforms.Compose([
             lambda img: pad_to_multiple(img, 64),
             transforms.ToTensor()
@@ -244,6 +247,7 @@ def main(argv):
     )
     train_dataset = Dataset(
         args.train_dataset,
+        pol,
         transform=transforms.Compose([
             transforms.Pad(256, padding_mode="reflect"),
             transforms.RandomCrop(args.patch_size),

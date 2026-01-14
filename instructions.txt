@@ -1,0 +1,19 @@
+1. Start new session (8 CPU, 1 GPU, 24 hrs)
+
+2. module load gcc/11.2.0-gcc-8.5.0-cuda-11.2.2-yzmk
+
+3. Navigate to elic folder
+ 	-> cd dev/AHT_DCT
+
+4. conda env create -f environment.yml
+
+5. conda activate aht
+
+6. conda install -c conda-forge tensorboard
+    -> tensorboard --logdir /scratch/zb7df/checkpoints
+
+7. Training
+    -> python train.py -e 2 -bs 8
+
+8. Testing
+    -> 
