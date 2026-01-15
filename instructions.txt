@@ -12,7 +12,7 @@
 6. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
 
 7. Training
-    -> python train.py -e 200 -bs 32
+    -> python train.py --lambda 0.013 -e 200 -bs 32
 
 8. Testing
-    -> python test.py
+    -> python test.py --lambda 0.013

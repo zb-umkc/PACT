@@ -6,6 +6,7 @@ import time
 import torch
 import argparse
 import numpy as np
+from tqdm import tqdm
 from PIL import Image
 from typing import Dict, Any
 import torch.nn.functional as F
@@ -53,12 +54,9 @@ def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0)
     # C x W x H
     img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
     
-    img = torch.tensor(img_np, dtype=torch.float32)
+    img = torch.tensor(img_np, dtype=torch.float32).unsqueeze(0)
     img = (img - min_val) / (max_val - min_val)
     return img
-
-def img2torch(img: Image.Image):
-    return ToTensor()(img).unsqueeze(0)
 
 def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255):
     return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
@@ -102,7 +100,7 @@ def report_total_kmacs():
     model = AHTModel().eval()
 
     # same training patch
-    x = torch.randn(1, 3, 256, 256)
+    x = torch.randn(1, 2, 256, 256)
 
     macs, params = profile(model, inputs=(x,), verbose=False)
 
@@ -149,7 +147,7 @@ def report_component_kmacs():
     H,W = 256,256
     model = AHTModel(M=M,N=N).eval()
 
-    x = torch.randn(1, 3, H, W)
+    x = torch.randn(1, 2, H, W)
     y = torch.randn(1, M, H//16, W//16)
     z = torch.randn(1, N, H//64, W//64)
 
@@ -214,24 +212,24 @@ def test(args):
         enc_time = AverageMeter()
         dec_time = AverageMeter()
 
-        for img_path in sorted(images_list):
-            img = load_image(img_path)
+        energy_1 = AverageMeter()
+        energy_2 = AverageMeter()
+        energy_3 = AverageMeter()
+        energy_4 = AverageMeter()
 
-            print(img.shape)
-            sys.exit()
-
-            x = img2torch(img)
-            h, w = x.size(2), x.size(3)
+        for img_path in tqdm(sorted(images_list)):
+            x = load_image(img_path)
+            h, w = x.shape[2], x.shape[3]
             x = x.to(device)
             p = 256
             x_pad = pad(x, p)
             img_name = img_path.split('/')[-1]
-            print(img_name)
+            # print(img_name)
             torch.cuda.synchronize()
             enc_start = time.time()
             with torch.no_grad():
                 energies = compute_group_energy(model, x_pad)
-                print("group energies:", energies)
+                # print("group energies:", energies)
                 out_enc = model.compress(x_pad)
             torch.cuda.synchronize()
             enc_t = time.time() - enc_start
@@ -261,17 +259,17 @@ def test(args):
             ybpp_img = len(out_enc["strings"][0]) * 8.0 / num_pixels
             zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels
 
-            print('image name:',img_name)
-            print(
-                f"{img_name}"
-                f"\tPSNR: {psnr_img} |"
-                f"\tMS-SSIM: {msssim} |"
-                f"\tBpp loss: {bpp_img} |"
-                f"\ty bpp: {ybpp_img} |"
-                f"\tz bpp: {zbpp_img} |"
-                f"\tenc time: {enc_t} |"
-                f"\tdec time: {dec_t} |"
-            )
+            # print('image:',img_name)
+            # print(
+            #     f"{img_name}"
+            #     f"\tPSNR: {psnr_img} |"
+            #     f"\tMS-SSIM: {msssim} |"
+            #     f"\tBpp loss: {bpp_img} |"
+            #     f"\ty bpp: {ybpp_img} |"
+            #     f"\tz bpp: {zbpp_img} |"
+            #     f"\tenc time: {enc_t} |"
+            #     f"\tdec time: {dec_t} |"
+            # )
 
             bpp_loss.update(bpp_img)
             psnr.update(psnr_img)
@@ -280,22 +278,31 @@ def test(args):
             z_bpp.update(zbpp_img)
             enc_time.update(enc_t)
             dec_time.update(dec_t)
+            energy_1.update(energies[0])
+            energy_2.update(energies[1])
+            energy_3.update(energies[2])
+            energy_4.update(energies[3])
+
         print(
             f"Test:"
-            f"\tPSNR: {psnr.avg} |"
-            f"\tMS-SSIM: {ssim.avg} |"
-            f"\tBpp loss: {bpp_loss.avg} |"
-            f"\ty bpp: {y_bpp.avg} |"
-            f"\tz bpp: {z_bpp.avg} |"
-            f"\tenc time: {enc_time.avg} |"
-            f"\tdec time: {dec_time.avg} |"
+            f"\n--PSNR: {psnr.avg}"
+            f"\n--MS-SSIM: {ssim.avg}"
+            f"\n--Bpp loss: {bpp_loss.avg}"
+            f"\n--y bpp: {y_bpp.avg}"
+            f"\n--z bpp: {z_bpp.avg}"
+            f"\n--enc time: {enc_time.avg}"
+            f"\n--dec time: {dec_time.avg}"
+            f"\n--Energy (Grp 1): {energy_1.avg}"
+            f"\n--Energy (Grp 2): {energy_2.avg}"
+            f"\n--Energy (Grp 3): {energy_3.avg}"
+            f"\n--Energy (Grp 4): {energy_4.avg}"
         )
         bpp_all.append(bpp_loss.avg)
         psnr_all.append(psnr.avg)
         ssim_all.append(ssim.avg)
-    print(bpp_all)
-    print(psnr_all)
-    print(ssim_all)
+    # print(bpp_all)
+    # print(psnr_all)
+    # print(ssim_all)
 
 if __name__ == '__main__':
 
@@ -309,9 +316,9 @@ if __name__ == '__main__':
     # print(args)
 
     # Reporting KMAX
-    # report_component_kmacs()
-    # report_decoder_kmacs()
-    # report_total_kmacs()
+    report_component_kmacs()
+    report_decoder_kmacs()
+    report_total_kmacs()
 
     pol = "HH"
     args.dataset = f"{args.dataset}/gt_{pol}"

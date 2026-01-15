@@ -103,7 +103,7 @@ class CustomDataParallel(nn.DataParallel):
         except AttributeError:
             return getattr(self.module, key)
 
-def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global_step, clip_max_norm):
+def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global_step, clip_max_norm, writer):
     model.train()
     print(model.training)
     device = next(model.parameters()).device
@@ -155,6 +155,10 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
                 f'\t time : {t_end:.2f} |'
             )
             torch.cuda.empty_cache()
+
+    writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
+    writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
+    writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
         
     return global_step
 
@@ -191,9 +195,9 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
         f"\ty bpp: {y_bpp.avg:.4f} |"
         f"\tz bpp: {z_bpp.avg:.4f} |"
     )
-    writer.add_scalar("test_loss", loss.avg, global_step = epoch)
-    writer.add_scalar("test_mse_loss", mse_loss.avg, global_step = epoch)
-    writer.add_scalar("test_bpp_loss", bpp_loss.avg, global_step = epoch)
+    writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
+    writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
+    writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
 
     return loss.avg
 
@@ -311,10 +315,16 @@ def main(argv):
 
 
     #TODO: Use more sophisticated scheduler?
+    # lr_scheduler = lambda x : \
+    # 1e-4 if x < 2750 else (
+    #     3e-5 if x < 2850 else (
+    #         1e-5 if x < 2950 else 1e-6
+    #     )
+    # )
     lr_scheduler = lambda x : \
-    1e-4 if x < 2750 else (
-        3e-5 if x < 2850 else (
-            1e-5 if x < 2950 else 1e-6
+    1e-3 if x < 100 else (
+        3e-4 if x < 150 else (
+            1e-4 if x < 200 else 1e-5
         )
     )
 
@@ -349,9 +359,16 @@ def main(argv):
             epoch,
             global_step,
             args.clip_max_norm,
+            writer,
         )
 
-        loss = test_epoch(epoch, test_dataloader, net, criterion, writer)
+        loss = test_epoch(
+            epoch,
+            test_dataloader,
+            net,
+            criterion,
+            writer,
+        )
 
         is_best = loss < best_loss
         best_loss = min(loss, best_loss)
