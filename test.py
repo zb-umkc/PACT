@@ -1,3 +1,5 @@
+import os
+import sys
 import math
 import glob
 import time
@@ -45,8 +47,15 @@ def crop(x, size):
         value=0,
     )
     
-def load_image(filepath: str):
-    return Image.open(filepath).convert("RGB")
+def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0):
+    # W x H x C
+    img_np = np.load(filepath).astype(np.float32)
+    # C x W x H
+    img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
+    
+    img = torch.tensor(img_np, dtype=torch.float32)
+    img = (img - min_val) / (max_val - min_val)
+    return img
 
 def img2torch(img: Image.Image):
     return ToTensor()(img).unsqueeze(0)
@@ -166,10 +175,10 @@ def report_component_kmacs():
 # -------------------------------------------------------------
 def test(args):
     device = torch.device("cuda")
-    ##### dataset
-    images_list = (
-        glob.glob(f"{args.dataset}/*.png") + glob.glob(f"{args.dataset}/*.jpg") + glob.glob(f"{args.dataset}/*.jpeg"))
-
+    
+    images_list = os.listdir(os.path.abspath(args.dataset))
+    assert len(images_list) > 0, f"No files found in {args.dataset}"
+    images_list = [os.path.join(args.dataset, f) for f in images_list if f.endswith('.npy')]
 
     ##### load model
     import importlib
@@ -207,6 +216,10 @@ def test(args):
 
         for img_path in sorted(images_list):
             img = load_image(img_path)
+
+            print(img.shape)
+            sys.exit()
+
             x = img2torch(img)
             h, w = x.size(2), x.size(3)
             x = x.to(device)
@@ -287,10 +300,11 @@ def test(args):
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example training script.")
+    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
     parser.add_argument("--model_name", type=str, default="AHT")
-    parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
+    parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
-    parser.add_argument("-data", "--dataset", type=str, default='')
+    parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
     args = parser.parse_args()
     # print(args)
 
@@ -298,5 +312,9 @@ if __name__ == '__main__':
     # report_component_kmacs()
     # report_decoder_kmacs()
     # report_total_kmacs()
+
+    pol = "HH"
+    args.dataset = f"{args.dataset}/gt_{pol}"
+    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/AHT_lmbda{args.lmbda}/{args.checkpoint}"
 
     test(args)

@@ -21,15 +21,25 @@ class Dataset(torch.utils.data.Dataset):
         self.data_dir = f"{data_path}/gt_{pol}"
         self.dataset_list = [f for f in os.listdir(self.data_dir) if os.path.isfile(os.path.join(self.data_dir, f))]
         self.transform = transform
+        self.min_val = -5000.0
+        self.max_val = 5000.0
 
     def __len__(self):
         return len(self.dataset_list)
 
     def __getitem__(self, idx):
         image_path = os.path.join(self.data_dir, self.dataset_list[idx])
-        img = Image.open(image_path).convert("RGB")
+        # W x H x C
+        img_np = np.load(image_path).astype(np.float32)
+        # C x W x H
+        img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
+        
+        img = torch.tensor(img_np, dtype=torch.float32)
+        img = (img - self.min_val) / (self.max_val - self.min_val)
+
         if self.transform:
             return self.transform(img)
+        
         return img
 
 class RateDistortionLoss(nn.Module):
@@ -191,8 +201,8 @@ def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example training script.")
     parser.add_argument("--model_name", type=str, default="AHT")
     parser.add_argument("--model_class", type=str, default="hypers")
-    parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train/", help="Training dataset")
-    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation/", help="Testing dataset")
+    parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train", help="Training dataset")
+    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation", help="Testing dataset")
     parser.add_argument( "-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
     parser.add_argument( "-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
     parser.add_argument( "-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
@@ -203,8 +213,8 @@ def parse_args(argv):
     parser.add_argument( "--patch-size", type=int, nargs=2, default=(256, 256), help="Size of the patches to be cropped (default: %(default)s)")
     parser.add_argument("--cuda", default=True, help="Use cuda")
     parser.add_argument( "--save", action="store_true", default=True, help="Save model to disk")
-    parser.add_argument("--save_path", type=str, default="./output/", help="Where to Save model")
-    parser.add_argument("--log_dir", type=str, default="./output/", help="Where to Save logs")
+    parser.add_argument("--save_path", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save model")
+    parser.add_argument("--log_dir", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save logs")
     parser.add_argument("--seed", type=float, help="Set random seed for reproducibility")
     parser.add_argument( "--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
     parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
@@ -213,15 +223,27 @@ def parse_args(argv):
 
 
 def pad_to_multiple(img, k=64):
-    w, h = img.size
-    new_w = (w + k - 1) // k * k
-    new_h = (h + k - 1) // k * k
-    pad_w = new_w - w
-    pad_h = new_h - h
-    return transforms.functional.pad(img,
-        (0, 0, pad_w, pad_h),  # left, top, right, bottom
-        padding_mode="reflect"
-    )
+    if isinstance(img, torch.Tensor):
+        # Tensor shape: (C, H, W)
+        _, h, w = img.shape
+        new_w = (w + k - 1) // k * k
+        new_h = (h + k - 1) // k * k
+        pad_w = new_w - w
+        pad_h = new_h - h
+        return torch.nn.functional.pad(img, 
+            (0, pad_w, 0, pad_h), # left, right, top, bottom
+            mode="reflect"
+        )
+    else:
+        w, h = img.size
+        new_w = (w + k - 1) // k * k
+        new_h = (h + k - 1) // k * k
+        pad_w = new_w - w
+        pad_h = new_h - h
+        return transforms.functional.pad(img,
+            (0, 0, pad_w, pad_h),  # left, top, right, bottom
+            padding_mode="reflect"
+        )
 
 
 def main(argv):
@@ -242,18 +264,18 @@ def main(argv):
         pol,
         transform=transforms.Compose([
             lambda img: pad_to_multiple(img, 64),
-            transforms.ToTensor()
+            # transforms.ToTensor()
         ])
     )
     train_dataset = Dataset(
         args.train_dataset,
         pol,
         transform=transforms.Compose([
-            transforms.Pad(256, padding_mode="reflect"),
+            transforms.Pad(128, padding_mode="reflect"),
             transforms.RandomCrop(args.patch_size),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
-            transforms.ToTensor()
+            # transforms.ToTensor()
         ])
     )
 

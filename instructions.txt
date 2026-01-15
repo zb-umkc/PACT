@@ -5,15 +5,14 @@
 3. Navigate to elic folder
  	-> cd dev/AHT_DCT
 
-4. conda env create -f environment.yml
+4. (Optional): conda env create -f environment.yml
 
 5. conda activate aht
 
-6. conda install -c conda-forge tensorboard
-    -> tensorboard --logdir /scratch/zb7df/checkpoints
+6. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
 
 7. Training
-    -> python train.py -e 2 -bs 8
+    -> python train.py -e 200 -bs 32
 
 8. Testing
-    -> 
+    -> python test.py

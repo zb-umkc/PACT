@@ -18,7 +18,7 @@ class g_a(nn.Module):
 
         self.branch = nn.Sequential(
             # x -> 32 ch, H/2
-            conv2x2_down(3, 32),
+            conv2x2_down(2, 32),
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
             # 32 -> 64 ch, H/4
@@ -62,8 +62,8 @@ class g_s(nn.Module):
             deconv2x2_up(64, 32),
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 32 -> 3 ch, H
-            deconv2x2_up(32, 3),
+            # 32 -> 2 ch, H
+            deconv2x2_up(32, 2),
         )
 
     def forward(self, y_hat):
