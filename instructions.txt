@@ -3,17 +3,24 @@
 2. Navigate to elic folder
  	-> cd dev/AHT_DCT
 
-3. (Optional): conda env create -f environment.yml
+3. (Optional): Create conda environment from file
+    -> conda env create -f environment.yml
 
-4. conda activate aht
+4. (Optional): Set up SSH for GitHub access
+    -> eval "$(ssh-agent -s)"
+    -> ssh-add ~/.ssh/id_ed25519
+    -> ssh -T git@github.com
 
-5. Training
+5. conda activate aht
+
+6. Training
     -> python train.py --lambda 0.001 -e 200 -bs 32 --model_name AHT
 
-6. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
+7. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
 
-7. Testing
+8. Testing
     -> python test.py --lambda 0.0018
+
 
 
 Not needed?
