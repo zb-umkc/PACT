@@ -198,9 +198,9 @@ dependencies:
       - thop==0.1.1-2209072238
       - threadpoolctl==3.1.0
       - tifffile==2022.2.9
-      - torch==2.4.1+cu121
-      - torchaudio==2.4.1+cu121
-      - torchvision==0.19.1+cu121
+      # - torch==2.4.1+cu121
+      # - torchaudio==2.4.1+cu121
+      # - torchvision==0.19.1+cu121
       - tornado==6.1
       - tqdm==4.63.0
       - traitlets==5.1.1

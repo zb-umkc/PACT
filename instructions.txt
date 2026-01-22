@@ -6,13 +6,14 @@
  	-> cd dev/AHT_DCT
 
 4. (Optional): conda env create -f environment.yml
+- pip install torch==1.12.0 torchvision==0.13.0 torchaudio==0.12.0 --index-url https://download.pytorch.org/whl/cu112
 
 5. conda activate aht
 
 6. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
 
 7. Training
-    -> python train.py --lambda 0.013 -e 200 -bs 32
+    -> python train.py --lambda 0.0018 -e 200 -bs 32
 
 8. Testing
-    -> python test.py --lambda 0.013
+    -> python test.py --lambda 0.0018

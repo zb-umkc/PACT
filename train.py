@@ -7,10 +7,12 @@ import time
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
+from pytorch_msssim import ms_ssim
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from torch.utils.data import DataLoader
 from torchvision import transforms
@@ -75,6 +77,7 @@ class RateDistortionLoss(nn.Module):
         out["psnr"] = 10 * (torch.log(1 * 1 / out["mse_loss"]) / np.log(10))
 
         return out
+    
 
 class AverageMeter:
     """Compute running average."""
@@ -94,6 +97,26 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count
 
+
+class EarlyStopping:
+    def __init__(self, patience=10, delta=0):
+        self.patience = patience
+        self.delta = delta
+        self.best_loss = None
+        self.no_improvement_count = 0
+        self.stop_training = False
+    
+    def check_early_stop(self, val_loss):
+        if self.best_loss is None or val_loss < self.best_loss - self.delta:
+            self.best_loss = val_loss
+            self.no_improvement_count = 0
+        else:
+            self.no_improvement_count += 1
+            if self.no_improvement_count >= self.patience:
+                self.stop_training = True
+                print("Stopping early due to no improvement in validation loss.")
+
+
 class CustomDataParallel(nn.DataParallel):
     """Custom DataParallel to access the module methods."""
 
@@ -105,18 +128,16 @@ class CustomDataParallel(nn.DataParallel):
 
 def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global_step, clip_max_norm, writer):
     model.train()
-    print(model.training)
     device = next(model.parameters()).device
     loss = AverageMeter()
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
+    ea_loss = AverageMeter()
     psnr = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
 
-    t_start = time.time()
     for i, d in enumerate(train_dataloader):
-
         global_step+=1
         d = d.to(device)
         optimizer.zero_grad()
@@ -135,31 +156,30 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         bpp_loss.update(out_criterion["bpp_loss"])
         loss.update(out_criterion["loss"])
         mse_loss.update(out_criterion["mse_loss"])
+        ea_loss.update(out_criterion["ea_loss"])
         psnr.update(out_criterion["psnr"])
         y_bpp.update(out_criterion["y_bpp"])
         z_bpp.update(out_criterion["z_bpp"])
 
-        if i % 100 == 0 :
-            t_end = time.time()-t_start
-            t_start = time.time()
+        if (i > 0) and (i % 100 == 0):
             print(
-                f"Train epoch {epoch}: ["
+                f"-- Train epoch {epoch}: ["
                 f"{i*len(d)}/{len(train_dataloader.dataset)}"
                 f" ({100. * i / len(train_dataloader):.0f}%)]"
                 f"\tLoss: {loss.avg:.4f} |"
                 f"\tMSE loss: {mse_loss.avg:.6f} |"
                 f"\tPSNR: {psnr.avg:.3f} |"
                 f"\tBpp loss: {bpp_loss.avg:.4f} |"
-                f"\ty bpp: {y_bpp.avg:.4f} |"
-                f"\tz bpp: {z_bpp.avg:.4f} |"
-                f'\t time : {t_end:.2f} |'
+                f"\tEA loss: {ea_loss.avg:.4f} |"
+                f"\ty_bpp: {y_bpp.avg:.4f} |"
+                f"\tz_bpp: {z_bpp.avg:.4f}"
             )
             torch.cuda.empty_cache()
 
     writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
     writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
     writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
-        
+    writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
     return global_step
 
 
@@ -171,6 +191,7 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
     psnr = AverageMeter()
+    ea_loss = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
 
@@ -183,21 +204,24 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
             bpp_loss.update(out_criterion["bpp_loss"])
             loss.update(out_criterion["loss"])
             mse_loss.update(out_criterion["mse_loss"])
+            ea_loss.update(out_criterion["ea_loss"])
             psnr.update(out_criterion["psnr"])
             y_bpp.update(out_criterion["y_bpp"])
             z_bpp.update(out_criterion["z_bpp"])
     print(
-        f"Test epoch {epoch}: Average losses:"
+        f"-- Test epoch {epoch}: "
         f"\tLoss: {loss.avg:.4f} |"
         f"\tMSE loss: {mse_loss.avg:.6f} |"
         f"\tPSNR: {psnr.avg:.3f} |"
         f"\tBpp loss: {bpp_loss.avg:.4f} |"
-        f"\ty bpp: {y_bpp.avg:.4f} |"
-        f"\tz bpp: {z_bpp.avg:.4f} |"
+        f"\tEA loss: {ea_loss.avg:.4f} |"
+        f"\ty_bpp: {y_bpp.avg:.4f} |"
+        f"\tz_bpp: {z_bpp.avg:.4f} |"
     )
     writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
     writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
     writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
+    writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
 
     return loss.avg
 
@@ -266,20 +290,19 @@ def main(argv):
     test_dataset = Dataset(
         args.test_dataset,
         pol,
-        transform=transforms.Compose([
-            lambda img: pad_to_multiple(img, 64),
-            # transforms.ToTensor()
-        ])
+        transform=None,
+        # transform=transforms.Compose([
+        #     lambda img: pad_to_multiple(img, 64),
+        # ])
     )
     train_dataset = Dataset(
         args.train_dataset,
         pol,
         transform=transforms.Compose([
-            transforms.Pad(128, padding_mode="reflect"),
-            transforms.RandomCrop(args.patch_size),
+            # transforms.Pad(128, padding_mode="reflect"),
+            # transforms.RandomCrop(args.patch_size),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
-            # transforms.ToTensor()
         ])
     )
 
@@ -313,21 +336,6 @@ def main(argv):
     print(f"Total parameters: {total_params:,}")
     print(f"Trainable parameters: {trainable_params:,}")
 
-
-    #TODO: Use more sophisticated scheduler?
-    # lr_scheduler = lambda x : \
-    # 1e-4 if x < 2750 else (
-    #     3e-5 if x < 2850 else (
-    #         1e-5 if x < 2950 else 1e-6
-    #     )
-    # )
-    lr_scheduler = lambda x : \
-    1e-3 if x < 100 else (
-        3e-4 if x < 150 else (
-            1e-4 if x < 200 else 1e-5
-        )
-    )
-
     last_epoch = 0
 
     torch.backends.cudnn.deterministic = True
@@ -336,20 +344,25 @@ def main(argv):
     if args.cuda and torch.cuda.device_count() > 1:
         net = CustomDataParallel(net)
 
-    optimizer = optim.Adam(net.parameters(), lr=1e-4)
+    optimizer = optim.Adam(net.parameters(), lr=1e-2)
     criterion = RateDistortionLoss(lmbda=args.lmbda)
+    scheduler = ReduceLROnPlateau(
+        optimizer,
+        mode="min",
+        factor=0.5,
+        patience=10,
+        threshold=1e-3
+    )
+    early_stopping = EarlyStopping(patience=20, delta=1e-3)
 
     writer = SummaryWriter(args.log_dir)
 
     best_loss = float("inf")
     global_step = 0
     for epoch in range(last_epoch, args.epochs):
-
-        lr = lr_scheduler(epoch)
-        for param_group in optimizer.param_groups: 
-            param_group['lr'] = lr
-        
-        print(f"Learning rate: {optimizer.param_groups[0]['lr']}")
+        start_time = time.time()
+        print(f"Starting epoch {epoch}")
+        print(f"-- LR: {optimizer.param_groups[0]['lr']}")
         
         global_step = train_one_epoch(
             net,
@@ -374,11 +387,18 @@ def main(argv):
         best_loss = min(loss, best_loss)
 
         if is_best:
-            print(f"epoch {epoch} is best now!")
             torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
 
         if epoch % 1000 == 0:
             torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
+
+        epoch_time = time.time() - start_time
+        print(f"Epoch {epoch} finished: {epoch_time:.2f} seconds")
+
+        scheduler.step(loss)
+        early_stopping.check_early_stop(loss)
+        if early_stopping.stop_training:
+            break
 
 
 if __name__ == "__main__":

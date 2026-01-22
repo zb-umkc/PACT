@@ -221,16 +221,16 @@ def test(args):
             x = load_image(img_path)
             h, w = x.shape[2], x.shape[3]
             x = x.to(device)
-            p = 256
-            x_pad = pad(x, p)
+            # p = 256
+            # x_pad = pad(x, p)
             img_name = img_path.split('/')[-1]
             # print(img_name)
             torch.cuda.synchronize()
             enc_start = time.time()
             with torch.no_grad():
-                energies = compute_group_energy(model, x_pad)
+                energies = compute_group_energy(model, x) # REMOVED PAD
                 # print("group energies:", energies)
-                out_enc = model.compress(x_pad)
+                out_enc = model.compress(x) # REMOVED PAD
             torch.cuda.synchronize()
             enc_t = time.time() - enc_start
             
@@ -240,7 +240,8 @@ def test(args):
                 out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
             torch.cuda.synchronize()
             dec_t = time.time() - dec_start
-            x_hat = crop(out_dec["x_hat"], (h,w))
+            # x_hat = crop(out_dec["x_hat"], (h,w))
+            x_hat = out_dec["x_hat"]  # REMOVED CROP
             
             
             # # Save reconstruction
