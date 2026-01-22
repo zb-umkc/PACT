@@ -1,19 +1,20 @@
-1. Start new session (8 CPU, 1 GPU, 24 hrs)
+1. Start new session (Latest CUDA, 8 CPU, 1 GPU, 23 hrs)
 
-2. module load gcc/11.2.0-gcc-8.5.0-cuda-11.2.2-yzmk
-
-3. Navigate to elic folder
+2. Navigate to elic folder
  	-> cd dev/AHT_DCT
 
-4. (Optional): conda env create -f environment.yml
-- pip install torch==1.12.0 torchvision==0.13.0 torchaudio==0.12.0 --index-url https://download.pytorch.org/whl/cu112
+3. (Optional): conda env create -f environment.yml
 
-5. conda activate aht
+4. conda activate aht
+
+5. Training
+    -> python train.py --lambda 0.001 -e 200 -bs 32 --model_name AHT
 
 6. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT
 
-7. Training
-    -> python train.py --lambda 0.0018 -e 200 -bs 32
-
-8. Testing
+7. Testing
     -> python test.py --lambda 0.0018
+
+
+Not needed?
+-> module load gcc/11.2.0-gcc-8.5.0-cuda-11.2.2-yzmk

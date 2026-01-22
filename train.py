@@ -5,6 +5,7 @@ import sys
 import os
 import time
 import numpy as np
+from datetime import date
 from tqdm import tqdm
 from PIL import Image
 from pytorch_msssim import ms_ssim
@@ -161,20 +162,31 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         y_bpp.update(out_criterion["y_bpp"])
         z_bpp.update(out_criterion["z_bpp"])
 
-        if (i > 0) and (i % 100 == 0):
-            print(
-                f"-- Train epoch {epoch}: ["
-                f"{i*len(d)}/{len(train_dataloader.dataset)}"
-                f" ({100. * i / len(train_dataloader):.0f}%)]"
-                f"\tLoss: {loss.avg:.4f} |"
-                f"\tMSE loss: {mse_loss.avg:.6f} |"
-                f"\tPSNR: {psnr.avg:.3f} |"
-                f"\tBpp loss: {bpp_loss.avg:.4f} |"
-                f"\tEA loss: {ea_loss.avg:.4f} |"
-                f"\ty_bpp: {y_bpp.avg:.4f} |"
-                f"\tz_bpp: {z_bpp.avg:.4f}"
-            )
-            torch.cuda.empty_cache()
+        # if (i > 0) and (i % 100 == 0):
+        #     print(
+        #         f"-- Train epoch {epoch}: ["
+        #         f"{i*len(d)}/{len(train_dataloader.dataset)} "
+        #         f"Loss: {loss.avg:.4f} | "
+        #         f"MSE loss: {mse_loss.avg:.6f} | "
+        #         f"PSNR: {psnr.avg:.3f} | "
+        #         f"Bpp loss: {bpp_loss.avg:.4f} | "
+        #         f"EA loss: {ea_loss.avg:.4f} | "
+        #         f"y_bpp: {y_bpp.avg:.4f} | "
+        #         f"z_bpp: {z_bpp.avg:.4f}"
+        #     )
+        #     torch.cuda.empty_cache()
+
+    print(
+        f"-- Train | "
+        f"Loss: {loss.avg:.4f} | "
+        f"MSE: {mse_loss.avg:.6f} | "
+        f"PSNR: {psnr.avg:.3f} | "
+        f"BPP: {bpp_loss.avg:.4f} | "
+        f"EA Loss: {ea_loss.avg:.4f} | "
+        f"y_bpp: {y_bpp.avg:.4f} | "
+        f"z_bpp: {z_bpp.avg:.4f}"
+    )
+    torch.cuda.empty_cache()
 
     writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
     writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
@@ -209,14 +221,14 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
             y_bpp.update(out_criterion["y_bpp"])
             z_bpp.update(out_criterion["z_bpp"])
     print(
-        f"-- Test epoch {epoch}: "
-        f"\tLoss: {loss.avg:.4f} |"
-        f"\tMSE loss: {mse_loss.avg:.6f} |"
-        f"\tPSNR: {psnr.avg:.3f} |"
-        f"\tBpp loss: {bpp_loss.avg:.4f} |"
-        f"\tEA loss: {ea_loss.avg:.4f} |"
-        f"\ty_bpp: {y_bpp.avg:.4f} |"
-        f"\tz_bpp: {z_bpp.avg:.4f} |"
+        f"-- Test  | "
+        f"Loss: {loss.avg:.4f} | "
+        f"MSE: {mse_loss.avg:.6f} | "
+        f"PSNR: {psnr.avg:.3f} | "
+        f"BPP: {bpp_loss.avg:.4f} | "
+        f"EA Loss: {ea_loss.avg:.4f} | "
+        f"y_bpp: {y_bpp.avg:.4f} | "
+        f"z_bpp: {z_bpp.avg:.4f}"
     )
     writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
     writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
@@ -277,8 +289,10 @@ def pad_to_multiple(img, k=64):
 def main(argv):
     args = parse_args(argv)
     print(args)
-    args.log_dir = os.path.join(args.log_dir, args.model_name + '_lmbda' + str(args.lmbda))
-    args.save_path = os.path.join(args.save_path, args.model_name + '_lmbda' + str(args.lmbda))
+    today = date.today().strftime("%Y%m%d")
+    run_name = f"{args.model_name}_lmbda{str(args.lmbda)}_{today}"
+    args.log_dir = os.path.join(args.log_dir, run_name)
+    args.save_path = os.path.join(args.save_path, run_name)
     if not os.path.exists(args.log_dir): os.makedirs(args.log_dir)
     if not os.path.exists(args.save_path): os.makedirs(args.save_path)
     if args.seed is not None:
@@ -344,7 +358,7 @@ def main(argv):
     if args.cuda and torch.cuda.device_count() > 1:
         net = CustomDataParallel(net)
 
-    optimizer = optim.Adam(net.parameters(), lr=1e-2)
+    optimizer = optim.Adam(net.parameters(), lr=1e-3)
     criterion = RateDistortionLoss(lmbda=args.lmbda)
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -361,7 +375,7 @@ def main(argv):
     global_step = 0
     for epoch in range(last_epoch, args.epochs):
         start_time = time.time()
-        print(f"Starting epoch {epoch}")
+        print(f"\nStarting epoch {epoch}")
         print(f"-- LR: {optimizer.param_groups[0]['lr']}")
         
         global_step = train_one_epoch(
@@ -393,7 +407,7 @@ def main(argv):
             torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
 
         epoch_time = time.time() - start_time
-        print(f"Epoch {epoch} finished: {epoch_time:.2f} seconds")
+        print(f"-- Time: {epoch_time:.1f} seconds")
 
         scheduler.step(loss)
         early_stopping.check_early_stop(loss)
