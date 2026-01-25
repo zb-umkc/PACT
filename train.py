@@ -14,7 +14,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
@@ -41,7 +40,7 @@ class Dataset(torch.utils.data.Dataset):
         img = (img - self.min_val) / (self.max_val - self.min_val)
 
         if self.transform:
-            return self.transform(img)
+            img = self.transform(img)
         
         return img
 
@@ -127,7 +126,7 @@ class CustomDataParallel(nn.DataParallel):
         except AttributeError:
             return getattr(self.module, key)
 
-def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global_step, clip_max_norm, writer):
+def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global_step, writer, args):
     model.train()
     device = next(model.parameters()).device
     loss = AverageMeter()
@@ -139,16 +138,20 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
     z_bpp = AverageMeter()
 
     for i, d in enumerate(train_dataloader):
+        if args.size_check:
+            print("\nTRAINING")
+            print(f"-- Train input: {list(d.size())}")
+
         global_step+=1
         d = d.to(device)
         optimizer.zero_grad()
-        out_net = model(d)
+        out_net = model(d, args.size_check)
 
         out_criterion = criterion(out_net, d)
         out_criterion["loss"].backward()
         # out_criterion["loss"].mean().backward()
-        if clip_max_norm > 0:
-            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+        if args.clip_max_norm > 0:
+            total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
             if total_norm.isnan() or total_norm.isinf():
                 print("non-finite norm, skip this batch")
                 continue
@@ -162,40 +165,31 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         y_bpp.update(out_criterion["y_bpp"])
         z_bpp.update(out_criterion["z_bpp"])
 
-        # if (i > 0) and (i % 100 == 0):
-        #     print(
-        #         f"-- Train epoch {epoch}: ["
-        #         f"{i*len(d)}/{len(train_dataloader.dataset)} "
-        #         f"Loss: {loss.avg:.4f} | "
-        #         f"MSE loss: {mse_loss.avg:.6f} | "
-        #         f"PSNR: {psnr.avg:.3f} | "
-        #         f"Bpp loss: {bpp_loss.avg:.4f} | "
-        #         f"EA loss: {ea_loss.avg:.4f} | "
-        #         f"y_bpp: {y_bpp.avg:.4f} | "
-        #         f"z_bpp: {z_bpp.avg:.4f}"
-        #     )
-        #     torch.cuda.empty_cache()
+        if args.size_check:
+            break
 
-    print(
-        f"-- Train | "
-        f"Loss: {loss.avg:.4f} | "
-        f"MSE: {mse_loss.avg:.6f} | "
-        f"PSNR: {psnr.avg:.3f} | "
-        f"BPP: {bpp_loss.avg:.4f} | "
-        f"EA Loss: {ea_loss.avg:.4f} | "
-        f"y_bpp: {y_bpp.avg:.4f} | "
-        f"z_bpp: {z_bpp.avg:.4f}"
-    )
-    torch.cuda.empty_cache()
+    if not args.size_check:
+        print(
+            f"-- Train | "
+            f"Loss: {loss.avg:.4f} | "
+            f"MSE: {mse_loss.avg:.6f} | "
+            f"PSNR: {psnr.avg:.3f} | "
+            f"BPP: {bpp_loss.avg:.4f} | "
+            f"EA Loss: {ea_loss.avg:.4f} | "
+            f"y_bpp: {y_bpp.avg:.4f} | "
+            f"z_bpp: {z_bpp.avg:.4f}"
+        )
+        torch.cuda.empty_cache()
 
-    writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
-    writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
-    writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
-    writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
+        writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
+        writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
+        writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
+        writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
+
     return global_step
 
 
-def test_epoch(epoch, test_dataloader, model, criterion, writer):
+def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
     model.eval()
     device = next(model.parameters()).device
 
@@ -209,8 +203,12 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
 
     with torch.no_grad():
         for d in test_dataloader:
+            if args.size_check:
+                print("\nTESTING")
+                print(f"-- Test input: {list(d.size())}")
+
             d = d.to(device)
-            out_net = model(d)
+            out_net = model(d, args.size_check)
             out_criterion = criterion(out_net, d)
 
             bpp_loss.update(out_criterion["bpp_loss"])
@@ -220,20 +218,25 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer):
             psnr.update(out_criterion["psnr"])
             y_bpp.update(out_criterion["y_bpp"])
             z_bpp.update(out_criterion["z_bpp"])
-    print(
-        f"-- Test  | "
-        f"Loss: {loss.avg:.4f} | "
-        f"MSE: {mse_loss.avg:.6f} | "
-        f"PSNR: {psnr.avg:.3f} | "
-        f"BPP: {bpp_loss.avg:.4f} | "
-        f"EA Loss: {ea_loss.avg:.4f} | "
-        f"y_bpp: {y_bpp.avg:.4f} | "
-        f"z_bpp: {z_bpp.avg:.4f}"
-    )
-    writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
-    writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
-    writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
-    writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
+
+            if args.size_check:
+                break
+
+    if not args.size_check:
+        print(
+            f"-- Test  | "
+            f"Loss: {loss.avg:.4f} | "
+            f"MSE: {mse_loss.avg:.6f} | "
+            f"PSNR: {psnr.avg:.3f} | "
+            f"BPP: {bpp_loss.avg:.4f} | "
+            f"EA Loss: {ea_loss.avg:.4f} | "
+            f"y_bpp: {y_bpp.avg:.4f} | "
+            f"z_bpp: {z_bpp.avg:.4f}"
+        )
+        writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
+        writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
+        writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
+        writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
 
     return loss.avg
 
@@ -242,7 +245,7 @@ def parse_args(argv):
     parser.add_argument("--model_name", type=str, default="AHT")
     parser.add_argument("--model_class", type=str, default="hypers")
     parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train", help="Training dataset")
-    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation", help="Testing dataset")
+    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train_val", help="Testing dataset")
     parser.add_argument( "-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
     parser.add_argument( "-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
     parser.add_argument( "-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
@@ -258,6 +261,8 @@ def parse_args(argv):
     parser.add_argument("--seed", type=float, help="Set random seed for reproducibility")
     parser.add_argument( "--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
     parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
+    parser.add_argument( "--size_check", action="store_true", help="Print tensor sizes instead of training")
+    parser.add_argument( "--dct", action="store_true", help="Apply DCT transform to images")
     args = parser.parse_args(argv)
     return args
 
@@ -298,17 +303,15 @@ def main(argv):
     if args.seed is not None:
         torch.manual_seed(args.seed)
         random.seed(args.seed)
+    if args.size_check:
+        print("---------------------")
+        print("-- SIZE CHECK MODE --")
+        print("---------------------")
+        args.epochs = 1
+        
 
     pol = "HH"
 
-    test_dataset = Dataset(
-        args.test_dataset,
-        pol,
-        transform=None,
-        # transform=transforms.Compose([
-        #     lambda img: pad_to_multiple(img, 64),
-        # ])
-    )
     train_dataset = Dataset(
         args.train_dataset,
         pol,
@@ -317,7 +320,15 @@ def main(argv):
             # transforms.RandomCrop(args.patch_size),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
-        ])
+        ]),
+    )
+    test_dataset = Dataset(
+        args.test_dataset,
+        pol,
+        transform=None,
+        # transform=transforms.Compose([
+        #     lambda img: pad_to_multiple(img, 64),
+        # ])
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -340,8 +351,8 @@ def main(argv):
     )
 
     import importlib
-    net = importlib.import_module(f'.{args.model_name}', f'src.models').AHTModel()
-    print(net)
+    net = importlib.import_module(f'.AHT', f'src.models').AHTModel(dct=args.dct)
+    if args.size_check: print(net)
     net = net.to(device)
 
     total_params = sum(p.numel() for p in net.parameters())
@@ -369,14 +380,18 @@ def main(argv):
     )
     early_stopping = EarlyStopping(patience=20, delta=1e-3)
 
-    writer = SummaryWriter(args.log_dir)
+    if args.size_check:
+        writer = None
+    else:
+        writer = SummaryWriter(args.log_dir)
 
     best_loss = float("inf")
     global_step = 0
     for epoch in range(last_epoch, args.epochs):
         start_time = time.time()
-        print(f"\nStarting epoch {epoch}")
-        print(f"-- LR: {optimizer.param_groups[0]['lr']}")
+        if not args.size_check:
+            print(f"\nStarting epoch {epoch}")
+            print(f"-- LR: {optimizer.param_groups[0]['lr']}")
         
         global_step = train_one_epoch(
             net,
@@ -385,8 +400,8 @@ def main(argv):
             optimizer,
             epoch,
             global_step,
-            args.clip_max_norm,
             writer,
+            args,
         )
 
         loss = test_epoch(
@@ -395,24 +410,26 @@ def main(argv):
             net,
             criterion,
             writer,
+            args,
         )
 
-        is_best = loss < best_loss
-        best_loss = min(loss, best_loss)
+        if not args.size_check:
+            is_best = loss < best_loss
+            best_loss = min(loss, best_loss)
 
-        if is_best:
-            torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
+            if is_best:
+                torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
 
-        if epoch % 1000 == 0:
-            torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
+            if epoch % 1000 == 0:
+                torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
 
-        epoch_time = time.time() - start_time
-        print(f"-- Time: {epoch_time:.1f} seconds")
+            epoch_time = time.time() - start_time
+            print(f"-- Time: {epoch_time:.1f} seconds")
 
-        scheduler.step(loss)
-        early_stopping.check_early_stop(loss)
-        if early_stopping.stop_training:
-            break
+            scheduler.step(loss)
+            early_stopping.check_early_stop(loss)
+            if early_stopping.stop_training:
+                break
 
 
 if __name__ == "__main__":

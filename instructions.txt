@@ -14,6 +14,7 @@
 5. conda activate aht
 
 6. Training
+    -> bash train.sh
     -> python train.py --lambda 0.001 -e 200 -bs 32 --model_name AHT
 
 7. tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT

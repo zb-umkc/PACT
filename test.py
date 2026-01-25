@@ -180,7 +180,7 @@ def test(args):
 
     ##### load model
     import importlib
-    net = importlib.import_module(f'.{args.model_name}', f'src.models').AHTModel
+    net = importlib.import_module(f'.AHT', f'src.models').AHTModel
         
     args.checkpoint = [args.checkpoint]
     # suggest:
@@ -309,7 +309,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example training script.")
     parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
-    parser.add_argument("--model_name", type=str, default="AHT")
+    parser.add_argument("--run_name", type=str, default="AHT")
     parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
     parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
@@ -323,6 +323,6 @@ if __name__ == '__main__':
 
     pol = "HH"
     args.dataset = f"{args.dataset}/gt_{pol}"
-    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/AHT_lmbda{args.lmbda}/{args.checkpoint}"
+    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
 
     test(args)

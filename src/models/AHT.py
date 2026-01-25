@@ -3,9 +3,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from src.models.base_aht import BB as basemodel
-from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up
+from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
+from src.utils.dct import ImageDCT
 
 
+class PadLayer(nn.Module):
+    def __init__(self, padding, mode='constant', value=0):
+        super().__init__()
+        self.padding = padding
+        self.mode = mode
+        self.value = value
+
+    def forward(self, x):
+        return F.pad(x, self.padding, mode=self.mode, value=self.value)
+    
 # -------------------------------------------------------------
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
@@ -16,22 +27,63 @@ class g_a(nn.Module):
         mlp_ratio = 3
         partial_ratio = 4
 
+        # # Original (no DCT)
+        # self.branch = nn.Sequential(
+        #     # x -> 32 ch, H/2
+        #     conv2x2_down(2, 32),
+        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 32 -> 64 ch, H/4
+        #     conv2x2_down(32, 64),
+        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 64 -> 128 ch, H/8
+        #     conv2x2_down(64, 128),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 128 -> M (=256) ch, H/16
+        #     conv2x2_down(128, M),
+        # )
+
+        # # DCT Options 1/2: Changed first two conv2x2_down to k2s1 with padding='same'
+        # self.branch = nn.Sequential(
+        #     # x -> 32 ch, H/W unchanged (64)
+        #     conv2x2_down(2*4*4, 32, stride=1, padding="same"),
+        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 32 -> 64 ch, H/W unchanged (64)
+        #     conv2x2_down(32, 64, stride=1, padding="same"),
+        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 64 -> 128 ch, H/2 (32)
+        #     conv2x2_down(64, 128),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 128 -> M (=256) ch, H/4 (16)
+        #     conv2x2_down(128, M),
+        # )
+
+        # DCT Option 3: Changed first two conv2x2_down to conv3x3_same (k3s1p1)
         self.branch = nn.Sequential(
-            # x -> 32 ch, H/2
-            conv2x2_down(2, 32),
+            # x -> 32 ch, H/W unchanged (64)
+            conv3x3_same(2*4*4, 32),
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 32 -> 64 ch, H/4
-            conv2x2_down(32, 64),
+            # 32 -> 64 ch, H/W unchanged (64)
+            conv3x3_same(32, 64),
             PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 64 -> 128 ch, H/8
+            # 64 -> 128 ch, H/2 (32)
             conv2x2_down(64, 128),
             PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
             PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
             PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 128 -> M (=256) ch, H/16
+            # 128 -> M (=256) ch, H/4 (16)
             conv2x2_down(128, M),
         )
 
@@ -49,22 +101,61 @@ class g_s(nn.Module):
         mlp_ratio = 3
         partial_ratio = 4
 
+        # # Original (no inverse DCT in reconstruction)
+        # self.branch = nn.Sequential(
+        #     # y (M=256, H/16) -> 128 ch, H/8
+        #     deconv2x2_up(M, 128),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 128 -> 64 ch, H/4
+        #     deconv2x2_up(128, 64),
+        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 64 -> 32 ch, H/2
+        #     deconv2x2_up(64, 32),
+        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 32 -> 2 ch, H
+        #     deconv2x2_up(32, 2),
+        # )
+
+        # DCT Options 1/3: Replaced last two deconv2x2_up with deconv3x3_same
         self.branch = nn.Sequential(
-            # y (M=256, H/16) -> 128 ch, H/8
+            # y (M=256, H/4) -> 128 ch, H/2
             deconv2x2_up(M, 128),
             PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 128 -> 64 ch, H/4
+            # 128 -> 64 ch, H
             deconv2x2_up(128, 64),
             PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 64 -> 32 ch, H/2
-            deconv2x2_up(64, 32),
+            # 64 -> 32 ch, H/W unchanged (64)
+            deconv3x3_same(64, 32),
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 32 -> 2 ch, H
-            deconv2x2_up(32, 2),
+            # 32 -> 32 ch, H/W unchanged (64)
+            deconv3x3_same(32, 2*4*4),
         )
+
+        # # DCT Option 2: Replaced last two deconv2x2_up with asymm. pad + Conv2d (k2s1)
+        # self.branch = nn.Sequential(
+        #     # y (M=256, H/4) -> 128 ch, H/2
+        #     deconv2x2_up(M, 128),
+        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 128 -> 64 ch, H
+        #     deconv2x2_up(128, 64),
+        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 64 -> 32 ch, H/W unchanged (64)
+        #     PadLayer((0, 1, 0, 1)),
+        #     nn.Conv2d(64, 32, kernel_size=2, stride=1, padding=0),
+        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # 32 -> 32 ch, H/W unchanged (64)
+        #     PadLayer((0, 1, 0, 1)),
+        #     nn.Conv2d(32, 2*4*4, kernel_size=2, stride=1, padding=0),
+        # )
 
     def forward(self, y_hat):
         return self.branch(y_hat)
@@ -218,11 +309,12 @@ def compute_group_energy(model, x):
 # FINAL AHT MODEL
 # -------------------------------------------------------------
 class AHTModel(basemodel):
-    def __init__(self, M: int = 256, N: int = 192):
+    def __init__(self, M: int = 256, N: int = 192, dct: bool = False):
         super().__init__(N)
         
         self.M = M
         self.N = N
+        self.dct = dct
 
         self.g_a = g_a(M)
         self.g_s = g_s(M)
@@ -240,7 +332,13 @@ class AHTModel(basemodel):
             tensor[:, 3*g:4*g],
         ]
 
-    def forward(self, x):
+    def forward(self, x_orig, size_check=False):
+
+        if self.dct:
+            x = ImageDCT(block_size=4).dct_2d(x_orig)
+        else:
+            x = x_orig
+
         # ---------------- Main analysis ----------------
         y = self.g_a(x)
 
@@ -279,7 +377,11 @@ class AHTModel(basemodel):
             )
 
         # ---------------- Reconstruction ----------------
-        x_hat = self.g_s(y_hat)
+        if self.dct:
+            x_hat_dct = self.g_s(y_hat)
+            x_hat = ImageDCT(block_size=4).idct_2d(x_hat_dct)
+        else:
+            x_hat = self.g_s(y_hat)
 
         groups_y  = self.split_groups(y)
         groups_mu = self.split_groups(mu)
@@ -287,6 +389,18 @@ class AHTModel(basemodel):
         ea_groups = []
         for yi, mui in zip(groups_y, groups_mu):
             ea_groups.append(torch.mean(torch.abs(yi - mui)))
+
+        if size_check:
+            print(f"-- x: {list(x.size())}")
+            print(f"-- y: {list(y.size())}")
+            print(f"-- z: {list(z.size())}")
+            print(f"-- z_hat: {list(z_hat.size())}")
+            print(f"-- z_likelihoods: {list(z_likelihoods.size())}")
+            print(f"-- mu: {list(mu.size())}")
+            print(f"-- scales: {list(scales.size())}")
+            print(f"-- y_hat: {list(y_hat.size())}")
+            print(f"-- y_likelihoods: {list(y_likelihoods.size())}")
+            print(f"-- x_hat: {list(x_hat.size())}")
 
         return {
             "x_hat": x_hat,

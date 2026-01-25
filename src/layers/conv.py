@@ -9,12 +9,21 @@ def conv3x3(in_ch, out_ch):
 def conv1x1(in_ch, out_ch):
     """1x1 convolution."""
     return nn.Conv2d(in_ch, out_ch, kernel_size=1, stride=1)
-    
-def conv2x2_down(in_ch, out_ch):
-    return nn.Conv2d(in_ch, out_ch, kernel_size=2, stride=2, padding=0)
 
-def deconv2x2_up(in_ch, out_ch):
-    return nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=2, output_padding=0, padding=0)
+###################################
+# TODO: Changed for DCT 
+def conv2x2_down(in_ch, out_ch, stride=2, padding=0):
+    return nn.Conv2d(in_ch, out_ch, kernel_size=2, stride=stride, padding=padding)
+
+def deconv2x2_up(in_ch, out_ch, stride=2, padding=0):
+    return nn.ConvTranspose2d(in_ch, out_ch, kernel_size=2, stride=stride, output_padding=0, padding=padding)
+
+def conv3x3_same(in_ch, out_ch, stride=1, padding=1):
+    return nn.Conv2d(in_ch, out_ch, kernel_size=3, stride=stride, padding=padding)
+
+def deconv3x3_same(in_ch, out_ch, stride=1, padding=1):
+    return nn.ConvTranspose2d(in_ch, out_ch, kernel_size=3, stride=stride, output_padding=0, padding=padding)
+###################################
 
 def conv4x4_down(in_ch, out_ch):
     return nn.Conv2d(in_ch, out_ch, kernel_size=4, stride=2, padding=1)
