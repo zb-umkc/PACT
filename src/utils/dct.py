@@ -35,3 +35,23 @@ class ImageDCT():
         idct_image = torch.cat((self.unblockify(idct_block[:, 0:n_blocks], [h, w], n_blocks),
                                 self.unblockify(idct_block[:, n_blocks:2*n_blocks], [h, w], n_blocks)), dim=1)
         return idct_image
+
+
+class dctLayer(torch.nn.Module):
+    def __init__(self, block_size):
+        super(dctLayer, self).__init__()
+        self.block_size = block_size
+        self.dct_util = ImageDCT(block_size)
+
+    def forward(self, x):
+        return self.dct_util.dct_2d(x)
+    
+
+class idctLayer(torch.nn.Module):
+    def __init__(self, block_size):
+        super(idctLayer, self).__init__()
+        self.block_size = block_size
+        self.dct_util = ImageDCT(block_size)
+
+    def forward(self, x):
+        return self.dct_util.idct_2d(x)

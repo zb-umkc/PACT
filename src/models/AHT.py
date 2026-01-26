@@ -4,7 +4,7 @@ import torch.nn.functional as F
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
-from src.utils.dct import ImageDCT
+from src.utils.dct import dctLayer, idctLayer
 
 
 class PadLayer(nn.Module):
@@ -21,71 +21,54 @@ class PadLayer(nn.Module):
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 256):
+    def __init__(self, M: int = 256, dct: bool = False):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
 
-        # # Original (no DCT)
-        # self.branch = nn.Sequential(
-        #     # x -> 32 ch, H/2
-        #     conv2x2_down(2, 32),
-        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        if dct:
+            # Changed first two conv2x2_down to conv3x3_same (k3s1p1)
+            self.branch = nn.Sequential(
+                # (B, C, H, W) --> (B, C*b*b, H/b, W/b) = (B, 32, 64, 64)
+                dctLayer(block_size=4),
 
-        #     # 32 -> 64 ch, H/4
-        #     conv2x2_down(32, 64),
-        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, C*b*b, H/b, W/b) --> (B, 32, H/b, W/b) = (B, 32, 64, 64)
+                conv3x3_same(2*4*4, 32),
+                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 64 -> 128 ch, H/8
-        #     conv2x2_down(64, 128),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
+                conv3x3_same(32, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 128 -> M (=256) ch, H/16
-        #     conv2x2_down(128, M),
-        # )
+                # (B, 64, H/b, W/b) --> (B, 128, H/2b, W/2b) = (B, 128, 32, 32)
+                conv2x2_down(64, 128),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        # # DCT Options 1/2: Changed first two conv2x2_down to k2s1 with padding='same'
-        # self.branch = nn.Sequential(
-        #     # x -> 32 ch, H/W unchanged (64)
-        #     conv2x2_down(2*4*4, 32, stride=1, padding="same"),
-        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 128, H/2b, W/2b) --> (B, M, H/4b, W/4b) = (B, 256, 16, 16)
+                conv2x2_down(128, M),
+            )
+        else:
+            self.branch = nn.Sequential(
+                # (B, C, H, W) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
+                conv2x2_down(2, 32),
+                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 32 -> 64 ch, H/W unchanged (64)
-        #     conv2x2_down(32, 64, stride=1, padding="same"),
-        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 32, H/2, W/2) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+                conv2x2_down(32, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 64 -> 128 ch, H/2 (32)
-        #     conv2x2_down(64, 128),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 64, H/4, W/4) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+                conv2x2_down(64, 128),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 128 -> M (=256) ch, H/4 (16)
-        #     conv2x2_down(128, M),
-        # )
-
-        # DCT Option 3: Changed first two conv2x2_down to conv3x3_same (k3s1p1)
-        self.branch = nn.Sequential(
-            # x -> 32 ch, H/W unchanged (64)
-            conv3x3_same(2*4*4, 32),
-            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-            # 32 -> 64 ch, H/W unchanged (64)
-            conv3x3_same(32, 64),
-            PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-            # 64 -> 128 ch, H/2 (32)
-            conv2x2_down(64, 128),
-            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-            # 128 -> M (=256) ch, H/4 (16)
-            conv2x2_down(128, M),
-        )
+                # (B, 128, H/8, W/8) --> (B, M, H/16, W/16) = (B, 256, 16, 16)
+                conv2x2_down(128, M),
+            )
 
     def forward(self, x):
         return self.branch(x)
@@ -95,67 +78,50 @@ class g_a(nn.Module):
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 256):
+    def __init__(self, M: int = 256, dct: bool = False):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
 
-        # # Original (no inverse DCT in reconstruction)
-        # self.branch = nn.Sequential(
-        #     # y (M=256, H/16) -> 128 ch, H/8
-        #     deconv2x2_up(M, 128),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        if dct:
+            # Replaced last two deconv2x2_up with deconv3x3_same
+            self.branch = nn.Sequential(
+                # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+                deconv2x2_up(M, 128),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 128 -> 64 ch, H/4
-        #     deconv2x2_up(128, 64),
-        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+                deconv2x2_up(128, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 64 -> 32 ch, H/2
-        #     deconv2x2_up(64, 32),
-        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
+                deconv3x3_same(64, 32),
+                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        #     # 32 -> 2 ch, H
-        #     deconv2x2_up(32, 2),
-        # )
+                # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
+                deconv3x3_same(32, 2*4*4),
 
-        # DCT Options 1/3: Replaced last two deconv2x2_up with deconv3x3_same
-        self.branch = nn.Sequential(
-            # y (M=256, H/4) -> 128 ch, H/2
-            deconv2x2_up(M, 128),
-            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, C*b*b, H/b, W/b) --> (B, C, H, W) = (B, 2, 256, 256)
+                idctLayer(block_size=4),
+            )
+        else:
+            self.branch = nn.Sequential(
+                # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+                deconv2x2_up(M, 128),
+                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 128 -> 64 ch, H
-            deconv2x2_up(128, 64),
-            PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+                deconv2x2_up(128, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 64 -> 32 ch, H/W unchanged (64)
-            deconv3x3_same(64, 32),
-            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 64, H/4, W/4) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
+                deconv2x2_up(64, 32),
+                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-            # 32 -> 32 ch, H/W unchanged (64)
-            deconv3x3_same(32, 2*4*4),
-        )
-
-        # # DCT Option 2: Replaced last two deconv2x2_up with asymm. pad + Conv2d (k2s1)
-        # self.branch = nn.Sequential(
-        #     # y (M=256, H/4) -> 128 ch, H/2
-        #     deconv2x2_up(M, 128),
-        #     PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-        #     # 128 -> 64 ch, H
-        #     deconv2x2_up(128, 64),
-        #     PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-        #     # 64 -> 32 ch, H/W unchanged (64)
-        #     PadLayer((0, 1, 0, 1)),
-        #     nn.Conv2d(64, 32, kernel_size=2, stride=1, padding=0),
-        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-        #     # 32 -> 32 ch, H/W unchanged (64)
-        #     PadLayer((0, 1, 0, 1)),
-        #     nn.Conv2d(32, 2*4*4, kernel_size=2, stride=1, padding=0),
-        # )
+                # (B, 32, H/2, W/2) --> (B, 2, H, W) = (B, 2, 256, 256)
+                deconv2x2_up(32, 2),
+            )
 
     def forward(self, y_hat):
         return self.branch(y_hat)
@@ -316,8 +282,8 @@ class AHTModel(basemodel):
         self.N = N
         self.dct = dct
 
-        self.g_a = g_a(M)
-        self.g_s = g_s(M)
+        self.g_a = g_a(M, dct=self.dct)
+        self.g_s = g_s(M, dct=self.dct)
 
         self.h_a = h_a(M, N)
         self.h_s = h_s(M, N)
@@ -332,13 +298,7 @@ class AHTModel(basemodel):
             tensor[:, 3*g:4*g],
         ]
 
-    def forward(self, x_orig, size_check=False):
-
-        if self.dct:
-            x = ImageDCT(block_size=4).dct_2d(x_orig)
-        else:
-            x = x_orig
-
+    def forward(self, x, size_check=False):
         # ---------------- Main analysis ----------------
         y = self.g_a(x)
 
@@ -377,11 +337,7 @@ class AHTModel(basemodel):
             )
 
         # ---------------- Reconstruction ----------------
-        if self.dct:
-            x_hat_dct = self.g_s(y_hat)
-            x_hat = ImageDCT(block_size=4).idct_2d(x_hat_dct)
-        else:
-            x_hat = self.g_s(y_hat)
+        x_hat = self.g_s(y_hat)
 
         groups_y  = self.split_groups(y)
         groups_mu = self.split_groups(mu)
@@ -417,7 +373,7 @@ class AHTModel(basemodel):
     # -------------------------------------------------------------
     def compress(self, x):
         """
-        Compress a single image tensor x in [0,1], shape (1,3,H,W).
+        Compress a single image tensor x in [0,1], shape (1,2,H,W).
         Returns:
             {
               "strings": [y_string, z_string],

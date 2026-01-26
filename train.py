@@ -298,16 +298,18 @@ def main(argv):
     run_name = f"{args.model_name}_lmbda{str(args.lmbda)}_{today}"
     args.log_dir = os.path.join(args.log_dir, run_name)
     args.save_path = os.path.join(args.save_path, run_name)
-    if not os.path.exists(args.log_dir): os.makedirs(args.log_dir)
-    if not os.path.exists(args.save_path): os.makedirs(args.save_path)
     if args.seed is not None:
         torch.manual_seed(args.seed)
         random.seed(args.seed)
+    
     if args.size_check:
         print("---------------------")
         print("-- SIZE CHECK MODE --")
         print("---------------------")
         args.epochs = 1
+    else:
+        if not os.path.exists(args.log_dir): os.makedirs(args.log_dir)
+        if not os.path.exists(args.save_path): os.makedirs(args.save_path)
         
 
     pol = "HH"

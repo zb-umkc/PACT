@@ -96,74 +96,52 @@ def get_scale_table(min, max, levels):
 # -------------------------------------------------------------
 #  CALCULATING kMACs
 # -------------------------------------------------------------
-def report_total_kmacs():
-    model = AHTModel().eval()
-
-    # same training patch
-    x = torch.randn(1, 2, 256, 256)
-
-    macs, params = profile(model, inputs=(x,), verbose=False)
-
-    H, W = x.shape[2], x.shape[3]
-    kmacs_per_pixel = macs / (H * W * 1000.0)
-
-    print("Total Params:", params)
-    print("Total MACs:", macs)
-    print("kMACs/pixel:", kmacs_per_pixel)
-
-
-class DecoderOnly(torch.nn.Module):
-    def __init__(self, model):
-        super().__init__()
-        self.h_s = model.h_s
-        self.g_s = model.g_s
-
-    def forward(self, inputs):
-        y, z = inputs
-        mu, scales = self.h_s(z)
-        return self.g_s(y + mu)
-
-
-def report_decoder_kmacs():
-    M, N = 256, 192
-    H, W = 256, 256
-
-    model = AHTModel(M=M, N=N).eval()
-    dec   = DecoderOnly(model).eval()
-
-    # Latent shapes: y (M, H/16, W/16), z (N, H/64, W/64)
-    y = torch.randn(1, M, H // 16, W // 16)
-    z = torch.randn(1, N, H // 64, W // 64)
-
-    macs, params = profile(dec, inputs=((y, z),), verbose=False)
-    kmacs = macs / (H * W * 1000.0)
-
-    print("Params: ",params)
-    print("Decoder MACs:", macs)
-    print("Decoder kMACs/pixel:", kmacs)
-
-def report_component_kmacs():
+def report_component_profiles(args=None):
     M,N = 256,192
     H,W = 256,256
-    model = AHTModel(M=M,N=N).eval()
+    model = AHTModel(M=M,N=N, dct=args.dct).eval()
 
     x = torch.randn(1, 2, H, W)
     y = torch.randn(1, M, H//16, W//16)
     z = torch.randn(1, N, H//64, W//64)
 
-    macs_ga, _ = profile(model.g_a, inputs=(x,), verbose=False)
-    print("g_a kMAC/pixel:", macs_ga / (H * W * 1000))
+    macs_ga, params_ga = profile(model.g_a, inputs=(x,), verbose=False)
+    macs_gs, params_gs = profile(model.g_s, inputs=(y,), verbose=False)
+    macs_ha, params_ha = profile(model.h_a, inputs=(y,), verbose=False)
+    macs_hs, params_hs = profile(model.h_s, inputs=(z,), verbose=False)
 
-    # g_s alone
-    macs_gs, _ = profile(model.g_s, inputs=(y,), verbose=False)
-    print("g_s kMAC/pixel:", macs_gs/(H*W*1000))
+    profiles = {
+        "g_a": {
+            "macs": macs_ga,
+            "params": int(params_ga),
+        },
+        "g_s": {
+            "macs": macs_gs,
+            "params": int(params_gs),
+        },
+        "h_a": {
+            "macs": macs_ha,
+            "params": int(params_ha),
+        },
+        "h_s": {
+            "macs": macs_hs,
+            "params": int(params_hs),
+        },
+        "enc": {
+            "macs": macs_ga + macs_ha,
+            "params": int(params_ga + params_ha),
+        },
+        "dec": {
+            "macs": macs_gs + macs_hs,
+            "params": int(params_gs + params_hs),
+        },
+        "total": {
+            "macs": macs_ga + macs_ha + macs_gs + macs_hs,
+            "params": int(params_ga + params_ha + params_gs + params_hs),
+        },
+    }
 
-    macs_ha, _ = profile(model.h_a, inputs=(y,), verbose=False)
-    print("h_a kMAC/pixel:", macs_ha / (H * W * 1000))
-
-    # h_s alone
-    macs_hs, _ = profile(model.h_s, inputs=(z,), verbose=False)
-    print("h_s kMAC/pixel:", macs_hs/(H*W*1000))
+    return profiles
 
 
 
@@ -181,145 +159,136 @@ def test(args):
     ##### load model
     import importlib
     net = importlib.import_module(f'.AHT', f'src.models').AHTModel
+
+    # Calculating kMACs
+    profiles = report_component_profiles(args=args)
+    
+    print("Loading", args.checkpoint)
+    checkpoint = torch.load(args.checkpoint, map_location=device)
+    model = net(dct=args.dct)
+    model.eval()
+    model.load_state_dict(checkpoint, strict=True)
+    model.update(get_scale_table(0.12, 64, args.num))
+    model = model.to(device)
+
+    bpp_loss = AverageMeter()
+    psnr = AverageMeter()
+    ssim = AverageMeter()
+    y_bpp = AverageMeter()
+    z_bpp = AverageMeter()
+    enc_time = AverageMeter()
+    dec_time = AverageMeter()
+
+    energy_1 = AverageMeter()
+    energy_2 = AverageMeter()
+    energy_3 = AverageMeter()
+    energy_4 = AverageMeter()
+
+    for img_path in tqdm(sorted(images_list)):
+        x = load_image(img_path)
+        h, w = x.shape[2], x.shape[3]
+        x = x.to(device)
+        # p = 256
+        # x_pad = pad(x, p)
+        img_name = img_path.split('/')[-1]
+        # print(img_name)
+        torch.cuda.synchronize()
+        enc_start = time.time()
+        with torch.no_grad():
+            energies = compute_group_energy(model, x) # REMOVED PAD
+            # print("group energies:", energies)
+            out_enc = model.compress(x) # REMOVED PAD
+        torch.cuda.synchronize()
+        enc_t = time.time() - enc_start
         
-    args.checkpoint = [args.checkpoint]
-    # suggest:
-    # args.checkpoint = [
-    #     '/path-to-ckpt/0.0018.pth.tar', 
-    #     '/path-to-ckpt/0.0035.pth.tar', 
-    #     '/path-to-ckpt/0.0067.pth.tar', 
-    #     '/path-to-ckpt/0.013.pth.tar', 
-    #     '/path-to-ckpt/0.025.pth.tar', 
-    #     '/path-to-ckpt/0.0483.pth.tar', 
-    # ]
-    bpp_all = []
-    psnr_all = []
-    ssim_all = []
-    for ckpt in args.checkpoint:
-        print("Loading", ckpt)
-        checkpoint = torch.load(ckpt, map_location=device)
-        model = net()
-        model.eval()
-        model.load_state_dict(checkpoint, strict=True)
-        model.update(get_scale_table(0.12, 64, args.num))
-        model = model.to(device)
+        torch.cuda.synchronize()
+        dec_start = time.time()
+        with torch.no_grad():
+            out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
+        torch.cuda.synchronize()
+        dec_t = time.time() - dec_start
+        # x_hat = crop(out_dec["x_hat"], (h,w))
+        x_hat = out_dec["x_hat"]  # REMOVED CROP
+        
+        
+        # # Save reconstruction
+        # save_rec = (x_hat.clamp(0,1) * 255).round().byte().cpu().squeeze(0).permute(1,2,0)
+        # Image.fromarray(save_rec.numpy()).save(f"{args.dataset}output/recon_{img_name}")
 
-        bpp_loss = AverageMeter()
-        psnr = AverageMeter()
-        ssim = AverageMeter()
-        y_bpp = AverageMeter()
-        z_bpp = AverageMeter()
-        enc_time = AverageMeter()
-        dec_time = AverageMeter()
+        psnr_img = compute_metrics(x, x_hat, 255)['psnr']
 
-        energy_1 = AverageMeter()
-        energy_2 = AverageMeter()
-        energy_3 = AverageMeter()
-        energy_4 = AverageMeter()
+        msssim = ms_ssim(x_hat, x, data_range=1.0).item()
 
-        for img_path in tqdm(sorted(images_list)):
-            x = load_image(img_path)
-            h, w = x.shape[2], x.shape[3]
-            x = x.to(device)
-            # p = 256
-            # x_pad = pad(x, p)
-            img_name = img_path.split('/')[-1]
-            # print(img_name)
-            torch.cuda.synchronize()
-            enc_start = time.time()
-            with torch.no_grad():
-                energies = compute_group_energy(model, x) # REMOVED PAD
-                # print("group energies:", energies)
-                out_enc = model.compress(x) # REMOVED PAD
-            torch.cuda.synchronize()
-            enc_t = time.time() - enc_start
-            
-            torch.cuda.synchronize()
-            dec_start = time.time()
-            with torch.no_grad():
-                out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
-            torch.cuda.synchronize()
-            dec_t = time.time() - dec_start
-            # x_hat = crop(out_dec["x_hat"], (h,w))
-            x_hat = out_dec["x_hat"]  # REMOVED CROP
-            
-            
-            # # Save reconstruction
-            # save_rec = (x_hat.clamp(0,1) * 255).round().byte().cpu().squeeze(0).permute(1,2,0)
-            # Image.fromarray(save_rec.numpy()).save(f"{args.dataset}output/recon_{img_name}")
+        # msssim = ms_ssim(x_hat, x, data_range=1.0)
+        # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
 
-            psnr_img = compute_metrics(x, x_hat, 255)['psnr']
+        num_pixels = h*w
+        bpp_img = sum(len(s) for s in out_enc["strings"]) * 8.0 / num_pixels
+        ybpp_img = len(out_enc["strings"][0]) * 8.0 / num_pixels
+        zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels
 
-            msssim = ms_ssim(x_hat, x, data_range=1.0).item()
+        bpp_loss.update(bpp_img)
+        psnr.update(psnr_img)
+        ssim.update(msssim)
+        y_bpp.update(ybpp_img)
+        z_bpp.update(zbpp_img)
+        enc_time.update(enc_t)
+        dec_time.update(dec_t)
+        energy_1.update(energies[0])
+        energy_2.update(energies[1])
+        energy_3.update(energies[2])
+        energy_4.update(energies[3])
 
-            # msssim = ms_ssim(x_hat, x, data_range=1.0)
-            # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
+    denom = 256*256*1000.0
+    results_filename = "results.csv"
+    import csv
+    fieldnames = ["run_name", "bpp_loss", "psnr", "ms_ssim", "enc_time", "dec_time", 
+                  "enc_kmac_per_px", "dec_kmac_per_px", "total_kmac_per_px", "total_params", 
+                  "energy_1", "energy_2", "energy_3", "energy_4"]
+    write_data = {"run_name": args.run_name, "bpp_loss": bpp_loss.avg, "psnr": psnr.avg, "ms_ssim": ssim.avg, "enc_time": enc_time.avg, "dec_time": dec_time.avg,
+                  "enc_kmac_per_px": profiles['enc']['macs']/denom, "dec_kmac_per_px": profiles['dec']['macs']/denom,
+                  "total_kmac_per_px": profiles['total']['macs']/denom, "total_params": profiles['total']['params'],
+                  "energy_1": energy_1.avg, "energy_2": energy_2.avg, "energy_3": energy_3.avg, "energy_4": energy_4.avg}
+    with open(results_filename, "a") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        if f.tell() == 0:
+            writer.writeheader()
+        writer.writerow(write_data)
 
-            num_pixels = h*w
-            bpp_img = sum(len(s) for s in out_enc["strings"]) * 8.0 / num_pixels
-            ybpp_img = len(out_enc["strings"][0]) * 8.0 / num_pixels
-            zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels
+    print(
+        f"Test:"
+        f"\n--PSNR: {psnr.avg}"
+        f"\n--MS-SSIM: {ssim.avg}"
+        f"\n--Bpp loss: {bpp_loss.avg}"
+        f"\n--y bpp: {y_bpp.avg}"
+        f"\n--z bpp: {z_bpp.avg}"
+        f"\n--enc time: {enc_time.avg}"
+        f"\n--dec time: {dec_time.avg}"
+        f"\n--Energy (Grp 1): {energy_1.avg}"
+        f"\n--Energy (Grp 2): {energy_2.avg}"
+        f"\n--Energy (Grp 3): {energy_3.avg}"
+        f"\n--Energy (Grp 4): {energy_4.avg}"
+        f"\n--Total Params | kMAC/px: {profiles['total']['params']} | {profiles['total']['macs']/denom}"
+        f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
+        f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
+        f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
+        f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
+        f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
+        f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
+    )
 
-            # print('image:',img_name)
-            # print(
-            #     f"{img_name}"
-            #     f"\tPSNR: {psnr_img} |"
-            #     f"\tMS-SSIM: {msssim} |"
-            #     f"\tBpp loss: {bpp_img} |"
-            #     f"\ty bpp: {ybpp_img} |"
-            #     f"\tz bpp: {zbpp_img} |"
-            #     f"\tenc time: {enc_t} |"
-            #     f"\tdec time: {dec_t} |"
-            # )
-
-            bpp_loss.update(bpp_img)
-            psnr.update(psnr_img)
-            ssim.update(msssim)
-            y_bpp.update(ybpp_img)
-            z_bpp.update(zbpp_img)
-            enc_time.update(enc_t)
-            dec_time.update(dec_t)
-            energy_1.update(energies[0])
-            energy_2.update(energies[1])
-            energy_3.update(energies[2])
-            energy_4.update(energies[3])
-
-        print(
-            f"Test:"
-            f"\n--PSNR: {psnr.avg}"
-            f"\n--MS-SSIM: {ssim.avg}"
-            f"\n--Bpp loss: {bpp_loss.avg}"
-            f"\n--y bpp: {y_bpp.avg}"
-            f"\n--z bpp: {z_bpp.avg}"
-            f"\n--enc time: {enc_time.avg}"
-            f"\n--dec time: {dec_time.avg}"
-            f"\n--Energy (Grp 1): {energy_1.avg}"
-            f"\n--Energy (Grp 2): {energy_2.avg}"
-            f"\n--Energy (Grp 3): {energy_3.avg}"
-            f"\n--Energy (Grp 4): {energy_4.avg}"
-        )
-        bpp_all.append(bpp_loss.avg)
-        psnr_all.append(psnr.avg)
-        ssim_all.append(ssim.avg)
-    # print(bpp_all)
-    # print(psnr_all)
-    # print(ssim_all)
 
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example training script.")
-    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
+    # parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
     parser.add_argument("--run_name", type=str, default="AHT")
     parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
     parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
+    parser.add_argument( "--dct", action="store_true", help="Apply DCT transform to images")
     args = parser.parse_args()
     # print(args)
-
-    # Reporting KMAX
-    report_component_kmacs()
-    report_decoder_kmacs()
-    report_total_kmacs()
 
     pol = "HH"
     args.dataset = f"{args.dataset}/gt_{pol}"
