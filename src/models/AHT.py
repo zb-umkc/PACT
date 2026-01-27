@@ -33,16 +33,16 @@ class g_a(nn.Module):
                 # (B, C, H, W) --> (B, C*b*b, H/b, W/b) = (B, 32, 64, 64)
                 dctLayer(block_size=4),
 
-                # (B, C*b*b, H/b, W/b) --> (B, 32, H/b, W/b) = (B, 32, 64, 64)
-                conv3x3_same(2*4*4, 32),
-                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # # (B, C*b*b, H/b, W/b) --> (B, 32, H/b, W/b) = (B, 32, 64, 64)
+                # conv3x3_same(2*4*4, 32),
+                # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
-                conv3x3_same(32, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
+                # conv3x3_same(32, 64),
+                # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 64, H/b, W/b) --> (B, 128, H/2b, W/2b) = (B, 128, 32, 32)
-                conv2x2_down(64, 128),
+                conv2x2_down(32, 128),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
@@ -92,15 +92,15 @@ class g_s(nn.Module):
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
-                deconv2x2_up(128, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-                deconv3x3_same(64, 32),
+                deconv2x2_up(128, 32),
                 PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
-                deconv3x3_same(32, 2*4*4),
+                # # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
+                # deconv3x3_same(64, 32),
+                # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+                # # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
+                # deconv3x3_same(32, 2*4*4),
 
                 # (B, C*b*b, H/b, W/b) --> (B, C, H, W) = (B, 2, 256, 256)
                 idctLayer(block_size=4),
