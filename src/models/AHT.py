@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import itertools
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
@@ -37,12 +38,12 @@ class g_a(nn.Module):
                 # conv3x3_same(2*4*4, 32),
                 # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
-                # conv3x3_same(32, 64),
-                # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
+                conv3x3_same(32, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 64, H/b, W/b) --> (B, 128, H/2b, W/2b) = (B, 128, 32, 32)
-                conv2x2_down(32, 128),
+                conv2x2_down(64, 128),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
@@ -92,12 +93,12 @@ class g_s(nn.Module):
                 PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
-                deconv2x2_up(128, 32),
-                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                deconv2x2_up(128, 64),
+                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-                # deconv3x3_same(64, 32),
-                # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
+                deconv3x3_same(64, 32),
+                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
                 # deconv3x3_same(32, 2*4*4),
@@ -256,6 +257,134 @@ class h_s(nn.Module):
         return mu, scales
 
 
+# # -------------------------------------------------------------
+# # Experiment: Uneven group sizes
+# # -------------------------------------------------------------
+# class h_a(nn.Module):
+#     def __init__(self, M: int = 256, N: int = 192):
+#         super().__init__()
+#         assert M % 4 == 0, "M must be divisible by 4."
+
+#         self.M = M
+#         self.N = N
+#         self.group_ch = [16, 32, 64, 144]  # uneven group sizes summing to 256
+
+#         # Internal width J corresponds to Conv k2s2 64 blocks
+#         J = self.group_ch
+
+#         # C0..C3: Conv k2s2 64
+#         self.c0 = conv2x2_down(self.group_ch[0], J[0])
+#         self.c1 = conv2x2_down(self.group_ch[1], J[1])
+#         self.c2 = conv2x2_down(self.group_ch[2], J[2])
+#         self.c3 = conv2x2_down(self.group_ch[3], J[3])
+
+#         mlp_ratio = 3
+#         partial_ratio = 4
+
+#         # P0 on 64 ch, P1 on 128, P2 on 192
+#         self.p0 = PConvRB(J[0], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 16
+#         self.p1 = PConvRB(J[0] + J[1], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 48
+#         self.p2 = PConvRB(J[0] + J[1] + J[2], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 112
+
+#         # C4: Conv k2s2 192 (input 4*J = 256 -> N = 192)
+#         self.c4 = conv2x2_down(J[0] + J[1] + J[2] + J[3], N)
+
+#     def forward(self, y):
+#         B, C, H, W = y.shape
+#         assert C == self.M
+
+#         g = self.group_ch
+#         idx = list(itertools.accumulate(g))
+#         y0 = y[:, 0:idx[0], :, :]
+#         y1 = y[:, idx[0]:idx[1], :, :]
+#         y2 = y[:, idx[1]:idx[2], :, :]
+#         y3 = y[:, idx[2]:idx[3], :, :]
+
+#         # z0 = P0(C0(y0))
+#         z0 = self.p0(self.c0(y0))                       # 16
+
+#         # z1 = P1(Cat(z0, C1(y1)))
+#         z1_in = torch.cat([z0, self.c1(y1)], dim=1)    #16 + 32 = 48
+#         z1 = self.p1(z1_in)
+
+#         # z2 = P2(Cat(z1, C2(y2)))
+#         z2_in = torch.cat([z1, self.c2(y2)], dim=1)    # 48 + 64 = 112
+#         z2 = self.p2(z2_in)
+
+#         # z = C4(Cat(z2, C3(y3)))
+#         z3_in = torch.cat([z2, self.c3(y3)], dim=1)    # 112 + 144 = 256
+#         z = self.c4(z3_in)                             # -> (B, 192, H/64, W/64)
+
+#         return z
+
+
+# # -------------------------------------------------------------
+# # Experiment: Uneven group sizes
+# # -------------------------------------------------------------
+# class h_s(nn.Module):
+#     def __init__(self, M: int = 256, N: int = 192):
+#         super().__init__()
+#         assert M % 4 == 0, "M must be divisible by 4."
+
+#         self.M = M
+#         self.N = N
+#         self.group_ch = [16, 32, 64, 144]  # uneven group sizes summing to 256
+
+#         hidden = 256               # matches TConv k2s2 256 in Fig. 2
+
+#         mlp_ratio = 3
+#         partial_ratio = 4
+
+#         # Trunk: T4 (192 -> 256, H/64 -> H/32)
+#         self.t4 = deconv2x2_up(N, hidden)
+
+#         # Three PConvRBs along the trunk (P'2, P'1, P'0)
+#         self.p2 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
+#         self.p1 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
+#         self.p0 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
+
+#         # T0..T3: each TConv k2s2 128 in the paper
+#         # Here we output 2 * group_ch = 128 channels so that:
+#         # (mu_i, alpha_i) = split along channel dim
+#         out_ch = [2*x for x in self.group_ch]
+
+#         self.t3 = deconv2x2_up(hidden, out_ch[3])   # shallowest (uses only T4)
+#         self.t2 = deconv2x2_up(hidden, out_ch[2])   # passes P'2
+#         self.t1 = deconv2x2_up(hidden, out_ch[1])   # passes P'2 + P'1
+#         self.t0 = deconv2x2_up(hidden, out_ch[0])   # passes P'2 + P'1 + P'0
+
+#     def forward(self, z_hat):
+#         # Base feature after T4: (B,256,H/32,W/32)
+#         f3 = self.t4(z_hat)
+
+#         # Group 3 (lowest energy, shallowest path): uses T4 only
+#         out3 = self.t3(f3)
+
+#         # Group 2: extra PConvRB (P'2)
+#         f2 = self.p2(f3)
+#         out2 = self.t2(f2)
+
+#         # Group 1: P'2 + P'1
+#         f1 = self.p1(f2)
+#         out1 = self.t1(f1)
+
+#         # Group 0 (highest energy, deepest): P'2 + P'1 + P'0
+#         f0 = self.p0(f1)
+#         out0 = self.t0(f0)
+
+#         # Each out_i: (B, 2*group_ch, H/16, W/16)
+#         mu0, alpha0 = torch.chunk(out0, 2, dim=1)
+#         mu1, alpha1 = torch.chunk(out1, 2, dim=1)
+#         mu2, alpha2 = torch.chunk(out2, 2, dim=1)
+#         mu3, alpha3 = torch.chunk(out3, 2, dim=1)
+
+#         # Concatenate in the order [y0,y1,y2,y3] to align with y-channel grouping
+#         mu     = torch.cat([mu0, mu1, mu2, mu3], dim=1)
+#         scales = torch.cat([alpha0, alpha1, alpha2, alpha3], dim=1)
+
+#         return mu, scales
+
+
 
 def compute_group_energy(model, x):
     with torch.no_grad():
@@ -297,6 +426,17 @@ class AHTModel(basemodel):
             tensor[:, 2*g:3*g],
             tensor[:, 3*g:4*g],
         ]
+    
+    # def split_groups(self, tensor):
+    #     B, C, H, W = tensor.shape
+    #     g = [16, 32, 64, 144]  # uneven group sizes summing to 256
+    #     idx = list(itertools.accumulate(g))
+    #     return [
+    #         tensor[:, 0:idx[0]],
+    #         tensor[:, idx[0]:idx[1]],
+    #         tensor[:, idx[1]:idx[2]],
+    #         tensor[:, idx[2]:idx[3]],
+    #     ]
 
     def forward(self, x, size_check=False):
         # ---------------- Main analysis ----------------

@@ -1,5 +1,9 @@
-for lmbda in 0.0035 0.0067 0.013 0.025 0.0483; do
-    echo "Lambda: ${lmbda}"
-    python train.py --lambda "${lmbda}" -e 200 -bs 32 --dct --model_name AHT_DCT-exp2
-    python test.py --run_name "AHT_DCT-exp2_lmbda${lmbda}_20260126" --dct
+# 0.0007 0.001 0.0015 0.0025 0.005 0.01
+
+for lmbda in 0.0004 0.0008 0.0016 0.0024 0.0032 0.004; do
+    for alpha in 0.5; do
+        echo "Lambda: ${lmbda} | Alpha: ${alpha}"
+        python train.py --lambda "${lmbda}" --alpha "${alpha}" -e 200 -bs 32 --dct --dist "l1_ssim" --model_name AHT_DCT-ls-a5
+        python test.py --run_name "AHT_DCT-ls-a5_lmbda${lmbda}" --dct
+    done
 done

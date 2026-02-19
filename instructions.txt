@@ -6,12 +6,13 @@
 3. (Optional): Create conda environment from file
     -> conda env create -f environment.yml
 
-4. (Optional): Set up SSH for GitHub access
-    -> eval "$(ssh-agent -s)"
-    -> ssh-add ~/.ssh/id_ed25519
-    -> ssh -T git@github.com
+4. Set up SSH for GitHub access
+    -> bash ssh.sh
 
 5. conda activate aht
+
+6. Test model config
+    -> python train.py --size_check --dct
 
 6. Training
     -> bash train.sh
@@ -21,8 +22,3 @@
 
 8. Testing
     -> python test.py --lambda 0.0018
-
-
-
-Not needed?
--> module load gcc/11.2.0-gcc-8.5.0-cuda-11.2.2-yzmk

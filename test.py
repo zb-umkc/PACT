@@ -5,13 +5,16 @@ import glob
 import time
 import torch
 import argparse
+import csv
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
 from typing import Dict, Any
+from torch import nn
 import torch.nn.functional as F
 from torchvision.transforms import ToTensor
 from pytorch_msssim import ms_ssim
+import matplotlib.pyplot as plt
 
 from thop import profile
 from src.models.AHT import AHTModel
@@ -58,15 +61,68 @@ def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0)
     img = (img - min_val) / (max_val - min_val)
     return img
 
-def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255):
-    return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
+# def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255):
+#     return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
+
+def psnr(a, b):
+    mse_loss = nn.MSELoss()
+    mse = mse_loss(a, b)
+    # psnr = 10 * torch.log10(1 / mse)
+    psnr = 10*np.log10(1/mse.item())
+
+    return psnr
+
+def sqnr(target, pred, neighborhood_size=5):
+    device = torch.device("cpu")
+    target = target.to(device)
+    pred = pred.to(device)
+    signal_power = torch.nn.functional.conv2d((target**2), 
+                                              torch.ones(1, 1, neighborhood_size, neighborhood_size))
+    noise = target - pred
+    noise_power = torch.nn.functional.conv2d((noise**2), 
+                                             torch.ones(1, 1, neighborhood_size, neighborhood_size))
+    sqnr = torch.mean(10*torch.log10(signal_power/neighborhood_size**2) - 10*torch.log10(noise_power/neighborhood_size**2))
+    
+    return sqnr
+
+def phase_error(phase1, phase2):
+    return torch.mean(torch.abs(phase1 - phase2))
 
 def compute_metrics(
-    org: torch.Tensor, rec: torch.Tensor, max_val: int = 255):
+        x: torch.Tensor,
+        x_hat: torch.Tensor,
+    ) -> Dict[str, Any]:
+
     metrics: Dict[str, Any] = {}
-    org = (org * max_val).clamp(0, max_val).round()
-    rec = (rec * max_val).clamp(0, max_val).round()
-    metrics["psnr"] = psnr(org, rec).item()
+
+    ### I/Q Error
+    # (0, 1) -> (0, 255)
+    orig_iq = x
+    rec_iq = torch.clamp(x_hat, 0, 1)
+    metrics["psnr_iq"] = psnr(orig_iq, rec_iq)
+    metrics["msssim_iq"] = ms_ssim(rec_iq, orig_iq, data_range=1.0).item()
+
+    ### Amp Error
+    # (0, 1) -> (-5000, 5000)
+    orig_denorm = (x * 10000) - 5000
+    rec_denorm = (x_hat * 10000) - 5000
+    amp_max_val = torch.sqrt(torch.tensor(5000 ** 2 + (-5000) ** 2))
+
+    # I/Q -> Amplitude: (0, 1)
+    orig_amp = torch.sqrt(torch.sum(orig_denorm ** 2, dim=1, keepdim=True))/amp_max_val
+    rec_amp = torch.sqrt(torch.sum(rec_denorm ** 2, dim=1, keepdim=True))/amp_max_val
+    rec_amp = torch.clamp(rec_amp, 0, 1)
+
+    metrics["psnr_amp"] = psnr(orig_amp, rec_amp)
+    metrics["sqnr_amp"] = sqnr(orig_amp, rec_amp).item()
+    metrics["msssim_amp"] = ms_ssim(rec_amp, orig_amp, data_range=1.0).item()
+
+    ### Phase Error
+    # I/Q -> Phase: (-pi, pi)
+    orig_phase = torch.atan2(orig_denorm[0, 1, :, :], orig_denorm[0, 0, :, :])
+    rec_phase = torch.atan2(rec_denorm[0, 1, :, :], rec_denorm[0, 0, :, :])
+    metrics["mae_phase"] = phase_error(orig_phase, rec_phase).item()   
+
     return metrics
 
 class AverageMeter:
@@ -172,8 +228,12 @@ def test(args):
     model = model.to(device)
 
     bpp_loss = AverageMeter()
-    psnr = AverageMeter()
-    ssim = AverageMeter()
+    psnr_iq = AverageMeter()
+    msssim_iq = AverageMeter()
+    psnr_amp = AverageMeter()
+    sqnr_amp = AverageMeter()
+    msssim_amp = AverageMeter()
+    mae_phase = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
     enc_time = AverageMeter()
@@ -215,9 +275,8 @@ def test(args):
         # save_rec = (x_hat.clamp(0,1) * 255).round().byte().cpu().squeeze(0).permute(1,2,0)
         # Image.fromarray(save_rec.numpy()).save(f"{args.dataset}output/recon_{img_name}")
 
-        psnr_img = compute_metrics(x, x_hat, 255)['psnr']
-
-        msssim = ms_ssim(x_hat, x, data_range=1.0).item()
+        # metrics = compute_metrics(x, x_hat, mode="iq") # Calculate in I/Q format
+        metrics = compute_metrics(x, x_hat)
 
         # msssim = ms_ssim(x_hat, x, data_range=1.0)
         # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
@@ -228,8 +287,12 @@ def test(args):
         zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels
 
         bpp_loss.update(bpp_img)
-        psnr.update(psnr_img)
-        ssim.update(msssim)
+        psnr_iq.update(metrics["psnr_iq"])
+        msssim_iq.update(metrics["msssim_iq"])
+        psnr_amp.update(metrics["psnr_amp"])
+        sqnr_amp.update(metrics["sqnr_amp"])
+        msssim_amp.update(metrics["msssim_amp"])
+        mae_phase.update(metrics["mae_phase"])
         y_bpp.update(ybpp_img)
         z_bpp.update(zbpp_img)
         enc_time.update(enc_t)
@@ -240,14 +303,23 @@ def test(args):
         energy_4.update(energies[3])
 
     denom = 256*256*1000.0
+    arch = args.run_name.split("_")[0]
+    model = args.run_name.split("_")[1]
+    lmbda = float(args.run_name.split("_")[2].replace("lmbda", ""))
+    train_date = args.run_name.split("_")[-1]
     results_filename = "results.csv"
-    import csv
-    fieldnames = ["run_name", "bpp_loss", "psnr", "ms_ssim", "enc_time", "dec_time", 
-                  "enc_kmac_per_px", "dec_kmac_per_px", "total_kmac_per_px", "total_params", 
-                  "energy_1", "energy_2", "energy_3", "energy_4"]
-    write_data = {"run_name": args.run_name, "bpp_loss": bpp_loss.avg, "psnr": psnr.avg, "ms_ssim": ssim.avg, "enc_time": enc_time.avg, "dec_time": dec_time.avg,
-                  "enc_kmac_per_px": profiles['enc']['macs']/denom, "dec_kmac_per_px": profiles['dec']['macs']/denom,
-                  "total_kmac_per_px": profiles['total']['macs']/denom, "total_params": profiles['total']['params'],
+    fieldnames = ["arch", "model", "lmbda", "train_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
+                  "msssim_amp", "mae_phase", "enc_time", "dec_time", 
+                  "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
+                  "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
+    write_data = {"arch": arch, "model": model, "lmbda": lmbda, "train_date": train_date, 
+                  "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
+                  "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg,
+                  "enc_time": enc_time.avg, "dec_time": dec_time.avg,
+                  "total_kmac_per_px": profiles['total']['macs']/denom, "enc_kmac_per_px": profiles['enc']['macs']/denom, 
+                  "dec_kmac_per_px": profiles['dec']['macs']/denom, "ga_kmac_per_px": profiles['g_a']['macs']/denom, 
+                  "ha_kmac_per_px": profiles['h_a']['macs']/denom, "gs_kmac_per_px": profiles['g_s']['macs']/denom,
+                  "hs_kmac_per_px": profiles['h_s']['macs']/denom, "total_params": profiles['total']['params'],
                   "energy_1": energy_1.avg, "energy_2": energy_2.avg, "energy_3": energy_3.avg, "energy_4": energy_4.avg}
     with open(results_filename, "a") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -257,9 +329,13 @@ def test(args):
 
     print(
         f"Test:"
-        f"\n--PSNR: {psnr.avg}"
-        f"\n--MS-SSIM: {ssim.avg}"
-        f"\n--Bpp loss: {bpp_loss.avg}"
+        f"\n--BPP: {bpp_loss.avg}"
+        f"\n--PSNR (I/Q): {psnr_iq.avg}"
+        f"\n--MS-SSIM (I/Q): {msssim_iq.avg}"
+        f"\n--PSNR (Amp): {psnr_amp.avg}"
+        f"\n--SQNR (Amp): {sqnr_amp.avg}"
+        f"\n--MS-SSIM (Amp): {msssim_amp.avg}"
+        f"\n--MAE (Phase): {mae_phase.avg}"
         f"\n--y bpp: {y_bpp.avg}"
         f"\n--z bpp: {z_bpp.avg}"
         f"\n--enc time: {enc_time.avg}"
@@ -293,5 +369,7 @@ if __name__ == '__main__':
     pol = "HH"
     args.dataset = f"{args.dataset}/gt_{pol}"
     args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
+    if "DCT" in args.run_name:
+        args.dct = True
 
     test(args)

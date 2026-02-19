@@ -8,7 +8,7 @@ import numpy as np
 from datetime import date
 from tqdm import tqdm
 from PIL import Image
-from pytorch_msssim import ms_ssim
+from pytorch_msssim import ms_ssim, ssim
 
 import torch
 import torch.nn as nn
@@ -43,16 +43,20 @@ class Dataset(torch.utils.data.Dataset):
             img = self.transform(img)
         
         return img
+    
 
 class RateDistortionLoss(nn.Module):
     """Custom rate distortion loss with a Lagrangian parameter."""
 
-    def __init__(self, lmbda=1e-2):
+    def __init__(self, lmbda=1e-2, distortion_loss="mse", alpha=0.5):
         super().__init__()
+        self.distortion_loss = distortion_loss
         self.mse = nn.MSELoss()
+        self.l1 = nn.L1Loss()
         self.lmbda = lmbda
         self.ea_weights = torch.tensor([0.0, 0.1, 0.3, 0.5])
         self.gamma = 1.0   # strength factor (paper uses gamma≈1)
+        self.alpha = alpha
 
     def forward(self, output, target):
         N, _, H, W = target.size()
@@ -65,7 +69,6 @@ class RateDistortionLoss(nn.Module):
         )
         out['y_bpp'] = torch.log(output['likelihoods']['y']).sum() / (-math.log(2) * num_pixels)
         out['z_bpp'] = torch.log(output['likelihoods']['z']).sum() / (-math.log(2) * num_pixels)
-        out["mse_loss"] = self.mse(output["x_hat"], target)
 
         # Calculate the EA Loss
         ea_loss = 0.0
@@ -73,8 +76,20 @@ class RateDistortionLoss(nn.Module):
             ea_loss += w * ea
             
         out["ea_loss"] = ea_loss
-        out["loss"] = self.lmbda * 255**2 * out["mse_loss"] + out["bpp_loss"] + self.gamma * ea_loss
+        out["mse_loss"] = self.mse(output["x_hat"], target)
         out["psnr"] = 10 * (torch.log(1 * 1 / out["mse_loss"]) / np.log(10))
+        out["l1_loss"] = self.l1(output["x_hat"], target)
+        # _msssim = ms_ssim(output["x_hat"], target, data_range=1.0).item()
+        # out["msssim_loss"] = 1 - _msssim
+        _ssim = ssim(output["x_hat"], target, data_range=1.0, nonnegative_ssim=True).item()
+        out["ssim_loss"] = 1 - _ssim
+
+        if self.distortion_loss == "mse":
+            out["loss"] = self.lmbda * 255**2 * out["mse_loss"] + out["bpp_loss"] + self.gamma * ea_loss
+
+        elif self.distortion_loss == "l1_ssim":
+            out["distortion_loss"] = (self.alpha * out["l1_loss"]) + ((1 - self.alpha) * out["ssim_loss"])
+            out["loss"] = self.lmbda * 255**2 * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
 
         return out
     
@@ -132,8 +147,10 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
     loss = AverageMeter()
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
-    ea_loss = AverageMeter()
     psnr = AverageMeter()
+    l1_loss = AverageMeter()
+    ssim_loss = AverageMeter()
+    ea_loss = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
 
@@ -160,8 +177,10 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         bpp_loss.update(out_criterion["bpp_loss"])
         loss.update(out_criterion["loss"])
         mse_loss.update(out_criterion["mse_loss"])
-        ea_loss.update(out_criterion["ea_loss"])
         psnr.update(out_criterion["psnr"])
+        l1_loss.update(out_criterion["l1_loss"])
+        ssim_loss.update(out_criterion["ssim_loss"])
+        ea_loss.update(out_criterion["ea_loss"])
         y_bpp.update(out_criterion["y_bpp"])
         z_bpp.update(out_criterion["z_bpp"])
 
@@ -174,15 +193,19 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
             f"Loss: {loss.avg:.4f} | "
             f"MSE: {mse_loss.avg:.6f} | "
             f"PSNR: {psnr.avg:.3f} | "
+            f"L1 Loss: {l1_loss.avg:.4f} | "
+            f"SSIM Loss: {ssim_loss.avg:.4f} | "
             f"BPP: {bpp_loss.avg:.4f} | "
             f"EA Loss: {ea_loss.avg:.4f} | "
-            f"y_bpp: {y_bpp.avg:.4f} | "
-            f"z_bpp: {z_bpp.avg:.4f}"
+            # f"y_bpp: {y_bpp.avg:.4f} | "
+            # f"z_bpp: {z_bpp.avg:.4f}"
         )
         torch.cuda.empty_cache()
 
         writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
         writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
+        writer.add_scalar("Train/L1 Loss", l1_loss.avg, global_step = epoch)
+        writer.add_scalar("Train/SSIM Loss", ssim_loss.avg, global_step = epoch)
         writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
         writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
 
@@ -197,6 +220,8 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
     bpp_loss = AverageMeter()
     mse_loss = AverageMeter()
     psnr = AverageMeter()
+    l1_loss = AverageMeter()
+    ssim_loss = AverageMeter()
     ea_loss = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
@@ -214,8 +239,10 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
             bpp_loss.update(out_criterion["bpp_loss"])
             loss.update(out_criterion["loss"])
             mse_loss.update(out_criterion["mse_loss"])
-            ea_loss.update(out_criterion["ea_loss"])
             psnr.update(out_criterion["psnr"])
+            l1_loss.update(out_criterion["l1_loss"])
+            ssim_loss.update(out_criterion["ssim_loss"])
+            ea_loss.update(out_criterion["ea_loss"])
             y_bpp.update(out_criterion["y_bpp"])
             z_bpp.update(out_criterion["z_bpp"])
 
@@ -228,13 +255,17 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
             f"Loss: {loss.avg:.4f} | "
             f"MSE: {mse_loss.avg:.6f} | "
             f"PSNR: {psnr.avg:.3f} | "
+            f"L1 Loss: {l1_loss.avg:.4f} | "
+            f"SSIM Loss: {ssim_loss.avg:.4f} | "
             f"BPP: {bpp_loss.avg:.4f} | "
             f"EA Loss: {ea_loss.avg:.4f} | "
-            f"y_bpp: {y_bpp.avg:.4f} | "
-            f"z_bpp: {z_bpp.avg:.4f}"
+            # f"y_bpp: {y_bpp.avg:.4f} | "
+            # f"z_bpp: {z_bpp.avg:.4f}"
         )
         writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
         writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
+        writer.add_scalar("Test/L1 Loss", l1_loss.avg, global_step = epoch)
+        writer.add_scalar("Test/SSIM Loss", ssim_loss.avg, global_step = epoch)
         writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
         writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
 
@@ -250,6 +281,7 @@ def parse_args(argv):
     parser.add_argument( "-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
     parser.add_argument( "-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
     parser.add_argument( "--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
+    parser.add_argument( "--alpha", dest="alpha", type=float, default=0.5, help="L1-SSIM weight parameter (default: %(default)s)")
     parser.add_argument( "-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
     parser.add_argument( "--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
     parser.add_argument( "--aux-learning-rate", default=1e-3, type=float, help="Auxiliary loss learning rate (default: %(default)s)")
@@ -263,6 +295,7 @@ def parse_args(argv):
     parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
     parser.add_argument( "--size_check", action="store_true", help="Print tensor sizes instead of training")
     parser.add_argument( "--dct", action="store_true", help="Apply DCT transform to images")
+    parser.add_argument("--dist", type=str, default="l1_ssim", help="Distortion loss function: mse or l1_ssim (default: %(default)s)")
     args = parser.parse_args(argv)
     return args
 
@@ -294,8 +327,8 @@ def pad_to_multiple(img, k=64):
 def main(argv):
     args = parse_args(argv)
     print(args)
-    today = date.today().strftime("%Y%m%d")
-    run_name = f"{args.model_name}_lmbda{str(args.lmbda)}_{today}"
+    # today = date.today().strftime("%Y%m%d")
+    run_name = f"{args.model_name}_lmbda{str(args.lmbda)}"
     args.log_dir = os.path.join(args.log_dir, run_name)
     args.save_path = os.path.join(args.save_path, run_name)
     if args.seed is not None:
@@ -372,7 +405,7 @@ def main(argv):
         net = CustomDataParallel(net)
 
     optimizer = optim.Adam(net.parameters(), lr=1e-3)
-    criterion = RateDistortionLoss(lmbda=args.lmbda)
+    criterion = RateDistortionLoss(lmbda=args.lmbda, distortion_loss=args.dist, alpha=args.alpha)
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode="min",
