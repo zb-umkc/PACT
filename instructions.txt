@@ -6,8 +6,8 @@
 3. (Optional): Create conda environment from file
     -> conda env create -f environment.yml
 
-4. Set up SSH for GitHub access
-    -> bash ssh.sh
+4. Set up SSH for GitHub access ("source" runs in current process, "bash" uses sub-shell)
+    -> source ssh.sh
 
 5. conda activate aht
 
