@@ -15,6 +15,7 @@ import torch.nn.functional as F
 from torchvision.transforms import ToTensor
 from pytorch_msssim import ms_ssim
 import matplotlib.pyplot as plt
+from datetime import date
 
 from thop import profile
 from src.models.AHT import AHTModel
@@ -306,13 +307,13 @@ def test(args):
     arch = args.run_name.split("_")[0]
     model = args.run_name.split("_")[1]
     lmbda = float(args.run_name.split("_")[2].replace("lmbda", ""))
-    train_date = args.run_name.split("_")[-1]
+    test_date = date.today().strftime("%Y%m%d")
     results_filename = "results.csv"
-    fieldnames = ["arch", "model", "lmbda", "train_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
+    fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
                   "msssim_amp", "mae_phase", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
                   "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
-    write_data = {"arch": arch, "model": model, "lmbda": lmbda, "train_date": train_date, 
+    write_data = {"arch": arch, "model": model, "lmbda": lmbda, "test_date": test_date, 
                   "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
                   "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg,
                   "enc_time": enc_time.avg, "dec_time": dec_time.avg,
