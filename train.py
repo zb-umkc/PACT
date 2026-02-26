@@ -165,8 +165,8 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         out_net = model(d, args.size_check)
 
         out_criterion = criterion(out_net, d)
-        out_criterion["loss"].backward()
-        # out_criterion["loss"].mean().backward()
+        # out_criterion["loss"].backward()
+        out_criterion["loss"].mean().backward()
         if args.clip_max_norm > 0:
             total_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_max_norm)
             if total_norm.isnan() or total_norm.isinf():
@@ -402,7 +402,10 @@ def main(argv):
     torch.backends.cudnn.benchmark = True
 
     if args.cuda and torch.cuda.device_count() > 1:
-        net = CustomDataParallel(net)
+        print("--------")
+        print("WARNING: Multiple GPUs detected - do you want to use CustomDataParallel?")
+        print("--------")
+        # net = CustomDataParallel(net)
 
     optimizer = optim.Adam(net.parameters(), lr=1e-3)
     criterion = RateDistortionLoss(lmbda=args.lmbda, distortion_loss=args.dist, alpha=args.alpha)

@@ -155,7 +155,7 @@ def get_scale_table(min, max, levels):
 # -------------------------------------------------------------
 def report_component_profiles(args=None):
     M,N = 256,192
-    H,W = 256,256
+    H,W = 1024,1024
     model = AHTModel(M=M,N=N, dct=args.dct).eval()
 
     x = torch.randn(1, 2, H, W)
@@ -198,6 +198,16 @@ def report_component_profiles(args=None):
         },
     }
 
+    print(
+        f"\n--Total Params | kMAC/px: {profiles['total']['params']} | {profiles['total']['macs']/denom}"
+        f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
+        f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
+        f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
+        f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
+        f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
+        f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
+    )
+
     return profiles
 
 
@@ -216,9 +226,6 @@ def test(args):
     ##### load model
     import importlib
     net = importlib.import_module(f'.AHT', f'src.models').AHTModel
-
-    # Calculating kMACs
-    profiles = report_component_profiles(args=args)
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -247,7 +254,7 @@ def test(args):
 
     for img_path in tqdm(sorted(images_list)):
         x = load_image(img_path)
-        h, w = x.shape[2], x.shape[3]
+        c, h, w = x.shape[1], x.shape[2], x.shape[3]
         x = x.to(device)
         # p = 256
         # x_pad = pad(x, p)
@@ -282,7 +289,8 @@ def test(args):
         # msssim = ms_ssim(x_hat, x, data_range=1.0)
         # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
 
-        num_pixels = h*w
+        # Calculate Bits per Pixel per Band
+        num_pixels = c*h*w
         bpp_img = sum(len(s) for s in out_enc["strings"]) * 8.0 / num_pixels
         ybpp_img = len(out_enc["strings"][0]) * 8.0 / num_pixels
         zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels
@@ -303,7 +311,6 @@ def test(args):
         energy_3.update(energies[2])
         energy_4.update(energies[3])
 
-    denom = 256*256*1000.0
     arch = args.run_name.split("_")[0]
     model = args.run_name.split("_")[1]
     lmbda = float(args.run_name.split("_")[2].replace("lmbda", ""))
@@ -345,13 +352,6 @@ def test(args):
         f"\n--Energy (Grp 2): {energy_2.avg}"
         f"\n--Energy (Grp 3): {energy_3.avg}"
         f"\n--Energy (Grp 4): {energy_4.avg}"
-        f"\n--Total Params | kMAC/px: {profiles['total']['params']} | {profiles['total']['macs']/denom}"
-        f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
-        f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
-        f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
-        f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
-        f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
-        f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
     )
 
 
@@ -372,5 +372,9 @@ if __name__ == '__main__':
     args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
     if "DCT" in args.run_name:
         args.dct = True
+
+    # Calculating kMACs
+    denom = 1024*1024*1000.0
+    profiles = report_component_profiles(args=args)
 
     test(args)
