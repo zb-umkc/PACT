@@ -5,7 +5,7 @@
     - `conda activate aht`
 3. Set up SSH for GitHub push/pull access
     - `source ssh.sh`
-    - Note: `bash` command will run in sub-shell and not give permissions in outer shell
+    - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
 4. Test model configuration before training
     - `python train.py --size_check [other_args]`
 5. Train model(s)
