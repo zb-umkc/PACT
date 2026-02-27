@@ -158,6 +158,7 @@ dependencies:
       - prometheus-client==0.13.1
       - prompt-toolkit==3.0.28
       - protobuf==3.19.4
+      - ptflops==0.7.3
       - ptyprocess==0.7.0
       - pure-eval==0.2.2
       - pyasn1==0.4.8
@@ -198,10 +199,10 @@ dependencies:
       - thop==0.1.1-2209072238
       - threadpoolctl==3.1.0
       - tifffile==2022.2.9
-      - torch==1.12.0+cu116
+      - torch==2.4.1+cu121
       - torch-dct==0.1.6
-      - torchaudio==0.12.0+cu116
-      - torchvision==0.13.0+cu116
+      - torchaudio==2.4.1+cu121
+      - torchvision==0.19.1+cu121
       - tornado==6.1
       - tqdm==4.63.0
       - traitlets==5.1.1

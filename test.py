@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from datetime import date
 
 from thop import profile
+from ptflops import get_model_complexity_info
 from src.models.AHT import AHTModel
 from src.models.AHT import compute_group_energy
 
@@ -153,12 +154,13 @@ def get_scale_table(min, max, levels):
 # -------------------------------------------------------------
 #  CALCULATING kMACs
 # -------------------------------------------------------------
-def report_component_profiles(args=None):
+def report_component_profiles(args=None, show_layers=False):
     M,N = 256,192
-    H,W = 1024,1024
+    H,W = 256,256
+    input_ch = 2
     model = AHTModel(M=M,N=N, dct=args.dct).eval()
 
-    x = torch.randn(1, 2, H, W)
+    x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
     z = torch.randn(1, N, H//64, W//64)
 
@@ -208,10 +210,15 @@ def report_component_profiles(args=None):
         f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
     )
 
+    if show_layers:
+        _, _ = get_model_complexity_info(
+            model, 
+            (input_ch, H, W), 
+            as_strings=True, 
+            print_per_layer_stat=True,
+        )
+
     return profiles
-
-
-
 
 # -------------------------------------------------------------
 # TEST starts here
@@ -315,7 +322,7 @@ def test(args):
     model = args.run_name.split("_")[1]
     lmbda = float(args.run_name.split("_")[2].replace("lmbda", ""))
     test_date = date.today().strftime("%Y%m%d")
-    results_filename = "results.csv"
+    results_filename = "results_highres.csv" if args.highres else "results.csv"
     fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
                   "msssim_amp", "mae_phase", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
@@ -354,11 +361,10 @@ def test(args):
         f"\n--Energy (Grp 4): {energy_4.avg}"
     )
 
-
 if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example training script.")
-    # parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
+    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
     parser.add_argument("--run_name", type=str, default="AHT")
     parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
@@ -368,13 +374,15 @@ if __name__ == '__main__':
     # print(args)
 
     pol = "HH"
+    args.highres = True if "test" in args.dataset.split("/")[-1] else False
     args.dataset = f"{args.dataset}/gt_{pol}"
-    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
+    # args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
+    args.checkpoint = f"/home/zb7df/dev/AHT_DCT/training_logs/{args.run_name}/{args.checkpoint}"
     if "DCT" in args.run_name:
         args.dct = True
 
     # Calculating kMACs
-    denom = 1024*1024*1000.0
-    profiles = report_component_profiles(args=args)
+    denom = 256*256*1000.0
+    profiles = report_component_profiles(args=args, show_layers=True)
 
-    test(args)
+    # test(args)
