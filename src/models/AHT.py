@@ -17,12 +17,54 @@ class PadLayer(nn.Module):
 
     def forward(self, x):
         return F.pad(x, self.padding, mode=self.mode, value=self.value)
+
+
+class PConvEA(nn.Module):
+    def __init__(self, N=192, G=4):
+        super().__init__()
+        self.N = N
+        self.G = G
+        # self.N_p = [26, 23, 10, 5] # From hard-coded indices (64 ch)
+        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        self.grp_size = 8
+        indices = [0, 1, 4, 5, 
+                   16, 17, 20, 21, 
+                   2, 6, 8, 9, 
+                   18, 22, 24, 25, 
+                   3, 7, 10, 12, 
+                   19, 23, 26, 28, 
+                   11, 13, 14, 15, 
+                   27, 29, 30, 31]
+        self.indices = torch.tensor(indices)
+
+        self.conv0 = conv3x3_same(self.grp_size, self.N_p[0])
+        self.conv1 = conv3x3_same(self.grp_size, self.N_p[1])
+        self.conv2 = conv3x3_same(self.grp_size, self.N_p[2])
+        self.conv3 = conv3x3_same(self.grp_size, self.N_p[3])
+
+    def forward(self, x):
+        idx = self.indices.view(1, -1, 1, 1).expand(x.size(0), -1, x.size(2), x.size(3)).to(x.device)
+        x_sorted = torch.gather(x, dim=1, index=idx)
+        x_sorted_groups = torch.split(x_sorted, self.grp_size, dim=1)
+
+        x_out = []
+        x_out.append(self.conv0(x_sorted_groups[0]))
+        x_out.append(self.conv1(x_sorted_groups[1]))
+        x_out.append(self.conv2(x_sorted_groups[2]))
+        x_out.append(self.conv3(x_sorted_groups[3]))
+
+        x_out = torch.cat(x_out, dim=1)
+
+        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
+
+        return x_out
     
+
 # -------------------------------------------------------------
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 256, dct: bool = False):
+    def __init__(self, M: int = 320, dct: bool = False):
         super().__init__()
 
         mlp_ratio = 3
@@ -39,17 +81,18 @@ class g_a(nn.Module):
                 # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
-                conv3x3_same(32, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # conv3x3_same(32, 64),
+                # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvEA(N=80),
 
                 # (B, 64, H/b, W/b) --> (B, 128, H/2b, W/2b) = (B, 128, 32, 32)
-                conv2x2_down(64, 128),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                conv2x2_down(80, 160),
+                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 128, H/2b, W/2b) --> (B, M, H/4b, W/4b) = (B, 256, 16, 16)
-                conv2x2_down(128, M),
+                conv2x2_down(160, M),
             )
         else:
             self.branch = nn.Sequential(
@@ -79,7 +122,7 @@ class g_a(nn.Module):
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 256, dct: bool = False):
+    def __init__(self, M: int = 320, dct: bool = False):
         super().__init__()
 
         mlp_ratio = 3
@@ -89,15 +132,15 @@ class g_s(nn.Module):
             # Replaced last two deconv2x2_up with deconv3x3_same
             self.branch = nn.Sequential(
                 # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
-                deconv2x2_up(M, 128),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                deconv2x2_up(M, 160),
+                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
-                deconv2x2_up(128, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                deconv2x2_up(160, 80),
+                PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-                deconv3x3_same(64, 32),
+                deconv3x3_same(80, 32),
                 PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
@@ -404,7 +447,7 @@ def compute_group_energy(model, x):
 # FINAL AHT MODEL
 # -------------------------------------------------------------
 class AHTModel(basemodel):
-    def __init__(self, M: int = 256, N: int = 192, dct: bool = False):
+    def __init__(self, M: int = 320, N: int = 192, dct: bool = False):
         super().__init__(N)
         
         self.M = M

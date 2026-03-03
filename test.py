@@ -383,6 +383,6 @@ if __name__ == '__main__':
 
     # Calculating kMACs
     denom = 256*256*1000.0
-    profiles = report_component_profiles(args=args, show_layers=True)
+    profiles = report_component_profiles(args=args, show_layers=False)
 
-    # test(args)
+    test(args)
