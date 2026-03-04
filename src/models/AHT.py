@@ -80,18 +80,18 @@ class g_a(nn.Module):
                 # conv3x3_same(2*4*4, 32),
                 # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 32, H/b, W/b) --> (B, 64, H/b, W/b) = (B, 64, 64, 64)
+                # (B, 32, H/b, W/b) --> (B, 80, H/b, W/b) = (B, 80, 64, 64)
                 # conv3x3_same(32, 64),
                 # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvEA(N=80),
 
-                # (B, 64, H/b, W/b) --> (B, 128, H/2b, W/2b) = (B, 128, 32, 32)
+                # (B, 80, H/b, W/b) --> (B, 160, H/2b, W/2b) = (B, 160, 32, 32)
                 conv2x2_down(80, 160),
                 PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
                 PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 128, H/2b, W/2b) --> (B, M, H/4b, W/4b) = (B, 256, 16, 16)
+                # (B, 160, H/2b, W/2b) --> (B, M, H/4b, W/4b) = (B, 320, 16, 16)
                 conv2x2_down(160, M),
             )
         else:
@@ -131,15 +131,15 @@ class g_s(nn.Module):
         if dct:
             # Replaced last two deconv2x2_up with deconv3x3_same
             self.branch = nn.Sequential(
-                # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+                # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
                 deconv2x2_up(M, 160),
                 PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+                # (B, 160, H/8, W/8) --> (B, 80, H/4, W/4) = (B, 80, 64, 64)
                 deconv2x2_up(160, 80),
                 PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 64, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
+                # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
                 deconv3x3_same(80, 32),
                 PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
