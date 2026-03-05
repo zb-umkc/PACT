@@ -523,7 +523,7 @@ def main(argv):
             if is_best:
                 torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
 
-            if epoch % 1000 == 0:
+            if epoch % 50 == 0:
                 torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
 
             epoch_time = time.time() - start_time

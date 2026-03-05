@@ -376,8 +376,8 @@ if __name__ == '__main__':
     pol = "HH"
     args.highres = True if "test" in args.dataset.split("/")[-1] else False
     args.dataset = f"{args.dataset}/gt_{pol}"
-    # args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
-    args.checkpoint = f"/home/zb7df/dev/AHT_DCT/training_logs/{args.run_name}/{args.checkpoint}"
+    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
+    # args.checkpoint = f"/home/zb7df/dev/AHT_DCT/training_logs/{args.run_name}/{args.checkpoint}"
     if "DCT" in args.run_name:
         args.dct = True
 
