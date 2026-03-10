@@ -158,7 +158,7 @@ def report_component_profiles(args=None, show_layers=False):
     M,N = 256,192
     H,W = 256,256
     input_ch = 2
-    model = AHTModel(M=M,N=N, dct=args.dct).eval()
+    model = AHTModel(M=M,N=N, dct=args.dct, exp=args.exp).eval()
 
     x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
@@ -236,7 +236,7 @@ def test(args):
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = net(dct=args.dct)
+    model = net(dct=args.dct, exp=args.exp)
     model.eval()
     model.load_state_dict(checkpoint, strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
@@ -369,7 +369,8 @@ if __name__ == '__main__':
     parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
     parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
-    parser.add_argument( "--dct", action="store_true", help="Apply DCT transform to images")
+    parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
+    parser.add_argument("--exp", type=int, default=0, help="Experiment number")
     args = parser.parse_args()
     # print(args)
 

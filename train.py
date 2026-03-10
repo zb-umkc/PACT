@@ -342,25 +342,26 @@ def parse_args(argv):
     parser.add_argument("--model_class", type=str, default="hypers")
     parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train", help="Training dataset")
     parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train_val", help="Testing dataset")
-    parser.add_argument( "-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
-    parser.add_argument( "-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
-    parser.add_argument( "-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
-    parser.add_argument( "--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
-    parser.add_argument( "--alpha", dest="alpha", type=float, default=1.0, help="Distortion loss weight parameter (default: %(default)s)")
-    parser.add_argument( "-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
-    parser.add_argument( "--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
-    parser.add_argument( "--aux-learning-rate", default=1e-3, type=float, help="Auxiliary loss learning rate (default: %(default)s)")
-    parser.add_argument( "--patch-size", type=int, nargs=2, default=(256, 256), help="Size of the patches to be cropped (default: %(default)s)")
+    parser.add_argument("-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
+    parser.add_argument("-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
+    parser.add_argument("-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
+    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
+    parser.add_argument("--alpha", dest="alpha", type=float, default=1.0, help="Distortion loss weight parameter (default: %(default)s)")
+    parser.add_argument("-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
+    parser.add_argument("--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
+    parser.add_argument("--aux-learning-rate", default=1e-3, type=float, help="Auxiliary loss learning rate (default: %(default)s)")
+    parser.add_argument("--patch-size", type=int, nargs=2, default=(256, 256), help="Size of the patches to be cropped (default: %(default)s)")
     parser.add_argument("--cuda", default=True, help="Use cuda")
-    parser.add_argument( "--save", action="store_true", default=True, help="Save model to disk")
+    parser.add_argument("--save", action="store_true", default=True, help="Save model to disk")
     parser.add_argument("--save_path", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save model")
     parser.add_argument("--log_dir", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save logs")
     parser.add_argument("--seed", type=float, help="Set random seed for reproducibility")
-    parser.add_argument( "--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
+    parser.add_argument("--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
     parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
-    parser.add_argument( "--size_check", action="store_true", help="Print tensor sizes instead of training")
-    parser.add_argument( "--dct", action="store_true", help="Apply DCT transform to images")
+    parser.add_argument("--size_check", action="store_true", help="Print tensor sizes instead of training")
+    parser.add_argument("--no-dct", action="store_false", default=True, dest="dct", help="Train baseline model without DCT")
     parser.add_argument("--iq_loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
+    parser.add_argument("--exp", type=int, default=0, help="Experiment number")
     args = parser.parse_args(argv)
     return args
 
@@ -451,7 +452,7 @@ def main(argv):
     )
 
     import importlib
-    net = importlib.import_module(f'.AHT', f'src.models').AHTModel(dct=args.dct)
+    net = importlib.import_module(f'.AHT', f'src.models').AHTModel(dct=args.dct, exp=args.exp)
     if args.size_check: print(net)
     net = net.to(device)
 
@@ -490,6 +491,7 @@ def main(argv):
 
     best_loss = float("inf")
     global_step = 0
+    last_periodic_ckpt = None
     for epoch in range(last_epoch, args.epochs):
         start_time = time.time()
         if not args.size_check:
@@ -524,7 +526,11 @@ def main(argv):
                 torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
 
             if epoch % 50 == 0:
-                torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' + str(epoch) + '.pth.tar'))
+                periodic_path = os.path.join(args.save_path, f'epoch_{epoch}.pth.tar')
+                if last_periodic_ckpt and os.path.exists(last_periodic_ckpt):
+                    os.remove(last_periodic_ckpt)
+                torch.save(net.state_dict(), periodic_path)
+                last_periodic_ckpt = periodic_path
 
             epoch_time = time.time() - start_time
             print(f"-- Time: {epoch_time:.1f} seconds")

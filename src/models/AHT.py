@@ -5,6 +5,7 @@ import itertools
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
+from src.layers.conv import *
 from src.utils.dct import dctLayer, idctLayer
 
 
@@ -19,40 +20,44 @@ class PadLayer(nn.Module):
         return F.pad(x, self.padding, mode=self.mode, value=self.value)
 
 
-class PConvEA(nn.Module):
-    def __init__(self, N=192, G=4):
+##########################################################################################
+
+class GConv0(nn.Module):
+    def __init__(self, N=80):
         super().__init__()
         self.N = N
-        self.G = G
-        # self.N_p = [26, 23, 10, 5] # From hard-coded indices (64 ch)
         self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        self.grp_size = 8
-        indices = [0, 1, 4, 5, 
-                   16, 17, 20, 21, 
-                   2, 6, 8, 9, 
-                   18, 22, 24, 25, 
-                   3, 7, 10, 12, 
-                   19, 23, 26, 28, 
-                   11, 13, 14, 15, 
-                   27, 29, 30, 31]
+        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
+        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+                   2, 6, 8, 9, 18, 22, 24, 25, 
+                   3, 7, 10, 12, 19, 23, 26, 28, 
+                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [
+        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
+        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
+        #     10, 26,                       # Grp 3
+        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
+        #     11, 14, 27, 30,               # Grp 5
+        #     15, 31                        # Grp 6
+        # ]
         self.indices = torch.tensor(indices)
+        self.grp_sizes = [8, 8, 8, 8]
+        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
 
-        self.conv0 = conv3x3_same(self.grp_size, self.N_p[0])
-        self.conv1 = conv3x3_same(self.grp_size, self.N_p[1])
-        self.conv2 = conv3x3_same(self.grp_size, self.N_p[2])
-        self.conv3 = conv3x3_same(self.grp_size, self.N_p[3])
+        self.convs = nn.ModuleList(
+            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
+        )
 
     def forward(self, x):
-        idx = self.indices.view(1, -1, 1, 1).expand(x.size(0), -1, x.size(2), x.size(3)).to(x.device)
+        idx = (
+            self.indices.view(1, -1, 1, 1)
+            .expand(x.size(0), -1, x.size(2), x.size(3))
+            .to(x.device)
+        )
         x_sorted = torch.gather(x, dim=1, index=idx)
-        x_sorted_groups = torch.split(x_sorted, self.grp_size, dim=1)
+        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
 
-        x_out = []
-        x_out.append(self.conv0(x_sorted_groups[0]))
-        x_out.append(self.conv1(x_sorted_groups[1]))
-        x_out.append(self.conv2(x_sorted_groups[2]))
-        x_out.append(self.conv3(x_sorted_groups[3]))
-
+        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
         x_out = torch.cat(x_out, dim=1)
 
         assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
@@ -60,15 +65,269 @@ class PConvEA(nn.Module):
         return x_out
     
 
+class GConv1(nn.Module):
+    def __init__(self, N=80):
+        super().__init__()
+        self.N = N
+        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
+        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+                   2, 6, 8, 9, 18, 22, 24, 25, 
+                   3, 7, 10, 12, 19, 23, 26, 28, 
+                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [
+        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
+        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
+        #     10, 26,                       # Grp 3
+        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
+        #     11, 14, 27, 30,               # Grp 5
+        #     15, 31                        # Grp 6
+        # ]
+        self.indices = torch.tensor(indices)
+        self.grp_sizes = [8, 8, 8, 8]
+        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
+
+        self.convs = nn.ModuleList(
+            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
+        )
+
+    def channel_shuffle(self, x, groups):
+        B, C, H, W = x.shape
+        channels_per_group = C // groups
+        x = x.view(B, groups, channels_per_group, H, W)
+        x = x.transpose(1, 2).contiguous()
+        x = x.view(B, C, H, W)
+        return x
+    
+    def forward(self, x):
+        idx = (
+            self.indices.view(1, -1, 1, 1)
+            .expand(x.size(0), -1, x.size(2), x.size(3))
+            .to(x.device)
+        )
+        x_sorted = torch.gather(x, dim=1, index=idx)
+        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
+
+        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
+        x_out = torch.cat(x_out, dim=1)
+        x_out = self.channel_shuffle(x=x_out, groups=4)
+
+        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
+
+        return x_out
+    
+
+class GConv2(nn.Module):
+    def __init__(self, N=80):
+        super().__init__()
+        self.N = N
+        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
+        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+                   2, 6, 8, 9, 18, 22, 24, 25, 
+                   3, 7, 10, 12, 19, 23, 26, 28, 
+                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [
+        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
+        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
+        #     10, 26,                       # Grp 3
+        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
+        #     11, 14, 27, 30,               # Grp 5
+        #     15, 31                        # Grp 6
+        # ]
+        self.indices = torch.tensor(indices)
+        self.grp_sizes = [8, 8, 8, 8]
+        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
+
+        self.convs = nn.ModuleList(
+            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
+        )
+        self.conv_mix = conv1x1(N, N)
+
+    def forward(self, x):
+        idx = (
+            self.indices.view(1, -1, 1, 1)
+            .expand(x.size(0), -1, x.size(2), x.size(3))
+            .to(x.device)
+        )
+        x_sorted = torch.gather(x, dim=1, index=idx)
+        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
+
+        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
+        x_out = torch.cat(x_out, dim=1)
+        x_out = self.conv_mix(x_out)
+
+        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
+
+        return x_out
+    
+
+class GConv3(nn.Module):
+    def __init__(self, N=80):
+        super().__init__()
+        self.N = N
+        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
+        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+                   2, 6, 8, 9, 18, 22, 24, 25, 
+                   3, 7, 10, 12, 19, 23, 26, 28, 
+                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [
+        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
+        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
+        #     10, 26,                       # Grp 3
+        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
+        #     11, 14, 27, 30,               # Grp 5
+        #     15, 31                        # Grp 6
+        # ]
+        self.indices = torch.tensor(indices)
+        self.grp_sizes = [8, 8, 8, 8]
+        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
+
+        self.convs = nn.ModuleList(
+            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
+        )
+        self.conv_mix = nn.Sequential(
+            conv1x1(N, N),
+            nn.LeakyReLU()
+        )
+
+    def forward(self, x):
+        idx = (
+            self.indices.view(1, -1, 1, 1)
+            .expand(x.size(0), -1, x.size(2), x.size(3))
+            .to(x.device)
+        )
+        x_sorted = torch.gather(x, dim=1, index=idx)
+        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
+
+        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
+        x_out = torch.cat(x_out, dim=1)
+        x_out = self.conv_mix(x_out)
+
+        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
+
+        return x_out
+    
+
+class GConv4(nn.Module):
+    def __init__(self, N=80):
+        super().__init__()
+        self.N = N
+        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
+        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+                   2, 6, 8, 9, 18, 22, 24, 25, 
+                   3, 7, 10, 12, 19, 23, 26, 28, 
+                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [
+        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
+        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
+        #     10, 26,                       # Grp 3
+        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
+        #     11, 14, 27, 30,               # Grp 5
+        #     15, 31                        # Grp 6
+        # ]
+        self.indices = torch.tensor(indices)
+        self.grp_sizes = [8, 8, 8, 8]
+        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
+
+        self.convs = nn.ModuleList(
+            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
+        )
+        self.conv_mix = nn.Sequential(
+            conv1x1(N, N),
+            nn.LeakyReLU()
+        )
+        self.res_proj = conv1x1(32, 80)
+
+    def forward(self, x):
+        idx = (
+            self.indices.view(1, -1, 1, 1)
+            .expand(x.size(0), -1, x.size(2), x.size(3))
+            .to(x.device)
+        )
+        x_sorted = torch.gather(x, dim=1, index=idx)
+        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
+
+        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
+        x_out = torch.cat(x_out, dim=1)
+        x_out = self.conv_mix(x_out)
+        x_out = x_out + self.res_proj(x)
+
+        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
+
+        return x_out
+    
+
+##########################################################################################
+
+
+# class TPConvEA(nn.Module):
+#     def __init__(self, N=80):
+#         super().__init__()
+#         self.N = N
+
+#         # same permutation as in PConvEA (used to sort channels on encode)
+#         indices = [0, 1, 4, 5, 16, 17, 20, 21,
+#                    2, 6, 8, 9, 18, 22, 24, 25,
+#                    3, 7, 10, 12, 19, 23, 26, 28,
+#                    11, 13, 14, 15, 27, 29, 30, 31]
+
+#         # input is 80 channels split into the same group sizes used in PConvEA
+#         self.N_p = [33, 29, 12, 6]
+#         self.grp_sizes = [8, 8, 8, 8]
+
+#         # build inverse permutation to reorder back to original channel order
+#         inv = torch.empty(len(indices), dtype=torch.long)
+#         for i, idx in enumerate(indices):
+#             inv[idx] = i
+
+#         self.register_buffer("inv_indices", inv)
+
+#         # Each group is deconv -> 8 output channels
+#         self.deconvs = nn.ModuleList(
+#             [deconv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.N_p, self.grp_sizes)]
+#         )
+
+#     def forward(self, x):
+#         # x: (B, 80, H, W)
+#         groups = torch.split(x, self.N_p, dim=1)
+#         out_groups = [deconv(g) for deconv, g in zip(self.deconvs, groups)]
+#         out = torch.cat(out_groups, dim=1)  # (B, 32, H, W)
+
+#         # reorder channels back to original ordering (inverse of the encoder permutation)
+#         idx = self.inv_indices.view(1, -1, 1, 1).expand_as(out)
+#         out = torch.gather(out, dim=1, index=idx)
+
+#         return out
+    
+
 # -------------------------------------------------------------
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 320, dct: bool = False):
+    def __init__(self, M: int = 320, dct: bool = False, exp: int = 0):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
+
+        if exp == 0:
+            print("Using GConv0")
+            GConv = GConv0
+        elif exp == 1:
+            print("Using GConv1")
+            GConv = GConv1
+        elif exp == 2:
+            print("Using GConv2")
+            GConv = GConv2
+        elif exp == 3:
+            print("Using GConv3")
+            GConv = GConv3
+        elif exp == 4:
+            print("Using GConv4")
+            GConv = GConv4
 
         if dct:
             # Changed first two conv2x2_down to conv3x3_same (k3s1p1)
@@ -83,7 +342,7 @@ class g_a(nn.Module):
                 # (B, 32, H/b, W/b) --> (B, 80, H/b, W/b) = (B, 80, 64, 64)
                 # conv3x3_same(32, 64),
                 # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvEA(N=80),
+                GConv(N=80),
 
                 # (B, 80, H/b, W/b) --> (B, 160, H/2b, W/2b) = (B, 160, 32, 32)
                 conv2x2_down(80, 160),
@@ -140,14 +399,17 @@ class g_s(nn.Module):
                 PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
                 # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-                deconv3x3_same(80, 32),
+                # deconv3x3_same(80, 32),
+                deconv2x2_up(80, 32), # Used when outputting I/Q directly
                 PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+                # TPConvEA(N=80),
 
                 # # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
                 # deconv3x3_same(32, 2*4*4),
 
                 # (B, C*b*b, H/b, W/b) --> (B, C, H, W) = (B, 2, 256, 256)
-                idctLayer(block_size=4),
+                # idctLayer(block_size=4),
+                deconv2x2_up(32, 2), # Used when outputting I/Q directly
             )
         else:
             self.branch = nn.Sequential(
@@ -176,18 +438,18 @@ class g_s(nn.Module):
 # y -> [y0..y3] -> z  (N=192)
 # -------------------------------------------------------------
 class h_a(nn.Module):
-    def __init__(self, M: int = 256, N: int = 192):
+    def __init__(self, M: int = 320, N: int = 192):
         super().__init__()
         assert M % 4 == 0, "M must be divisible by 4."
 
         self.M = M
         self.N = N
-        self.group_ch = M // 4   # 64
+        self.group_ch = M // 4   # 80
 
         # Internal width J corresponds to Conv k2s2 64 blocks
         J = 64
 
-        # C0..C3: Conv k2s2 64
+        # C0..C3: Conv k2s2 80
         self.c0 = conv2x2_down(self.group_ch, J)
         self.c1 = conv2x2_down(self.group_ch, J)
         self.c2 = conv2x2_down(self.group_ch, J)
@@ -237,7 +499,7 @@ class h_a(nn.Module):
 # z_hat (B,192,H/64,W/64) -> (mu, alpha) (B,256,H/16,W/16)
 # -------------------------------------------------------------
 class h_s(nn.Module):
-    def __init__(self, M: int = 256, N: int = 192):
+    def __init__(self, M: int = 320, N: int = 192):
         super().__init__()
         assert M % 4 == 0, "M must be divisible by 4."
 
@@ -447,14 +709,14 @@ def compute_group_energy(model, x):
 # FINAL AHT MODEL
 # -------------------------------------------------------------
 class AHTModel(basemodel):
-    def __init__(self, M: int = 320, N: int = 192, dct: bool = False):
+    def __init__(self, M: int = 320, N: int = 192, dct: bool = False, exp: int = 0):
         super().__init__(N)
         
         self.M = M
         self.N = N
         self.dct = dct
 
-        self.g_a = g_a(M, dct=self.dct)
+        self.g_a = g_a(M, dct=self.dct, exp=exp)
         self.g_s = g_s(M, dct=self.dct)
 
         self.h_a = h_a(M, N)
