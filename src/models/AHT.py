@@ -6,7 +6,6 @@ import itertools
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
 from src.layers.conv import *
-from src.utils.dct import dctLayer, idctLayer
 
 
 class PadLayer(nn.Module):
@@ -20,358 +19,34 @@ class PadLayer(nn.Module):
         return F.pad(x, self.padding, mode=self.mode, value=self.value)
 
 
-##########################################################################################
-
-class GConv0(nn.Module):
-    def __init__(self, N=80):
-        super().__init__()
-        self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
-        self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
-
-        self.convs = nn.ModuleList(
-            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
-        )
-
-    def forward(self, x):
-        idx = (
-            self.indices.view(1, -1, 1, 1)
-            .expand(x.size(0), -1, x.size(2), x.size(3))
-            .to(x.device)
-        )
-        x_sorted = torch.gather(x, dim=1, index=idx)
-        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
-
-        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
-        x_out = torch.cat(x_out, dim=1)
-
-        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
-
-        return x_out
-    
-
-class GConv1(nn.Module):
-    def __init__(self, N=80):
-        super().__init__()
-        self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
-        self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
-
-        self.convs = nn.ModuleList(
-            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
-        )
-
-    def channel_shuffle(self, x, groups):
-        B, C, H, W = x.shape
-        channels_per_group = C // groups
-        x = x.view(B, groups, channels_per_group, H, W)
-        x = x.transpose(1, 2).contiguous()
-        x = x.view(B, C, H, W)
-        return x
-    
-    def forward(self, x):
-        idx = (
-            self.indices.view(1, -1, 1, 1)
-            .expand(x.size(0), -1, x.size(2), x.size(3))
-            .to(x.device)
-        )
-        x_sorted = torch.gather(x, dim=1, index=idx)
-        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
-
-        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
-        x_out = torch.cat(x_out, dim=1)
-        x_out = self.channel_shuffle(x=x_out, groups=4)
-
-        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
-
-        return x_out
-    
-
-class GConv2(nn.Module):
-    def __init__(self, N=80):
-        super().__init__()
-        self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
-        self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
-
-        self.convs = nn.ModuleList(
-            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
-        )
-        self.conv_mix = conv1x1(N, N)
-
-    def forward(self, x):
-        idx = (
-            self.indices.view(1, -1, 1, 1)
-            .expand(x.size(0), -1, x.size(2), x.size(3))
-            .to(x.device)
-        )
-        x_sorted = torch.gather(x, dim=1, index=idx)
-        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
-
-        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
-        x_out = torch.cat(x_out, dim=1)
-        x_out = self.conv_mix(x_out)
-
-        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
-
-        return x_out
-    
-
-class GConv3(nn.Module):
-    def __init__(self, N=80):
-        super().__init__()
-        self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
-        self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
-
-        self.convs = nn.ModuleList(
-            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
-        )
-        self.conv_mix = nn.Sequential(
-            conv1x1(N, N),
-            nn.LeakyReLU()
-        )
-
-    def forward(self, x):
-        idx = (
-            self.indices.view(1, -1, 1, 1)
-            .expand(x.size(0), -1, x.size(2), x.size(3))
-            .to(x.device)
-        )
-        x_sorted = torch.gather(x, dim=1, index=idx)
-        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
-
-        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
-        x_out = torch.cat(x_out, dim=1)
-        x_out = self.conv_mix(x_out)
-
-        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
-
-        return x_out
-    
-
-class GConv4(nn.Module):
-    def __init__(self, N=80):
-        super().__init__()
-        self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
-        self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
-
-        self.convs = nn.ModuleList(
-            [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
-        )
-        self.conv_mix = nn.Sequential(
-            conv1x1(N, N),
-            nn.LeakyReLU()
-        )
-        self.res_proj = conv1x1(32, 80)
-
-    def forward(self, x):
-        idx = (
-            self.indices.view(1, -1, 1, 1)
-            .expand(x.size(0), -1, x.size(2), x.size(3))
-            .to(x.device)
-        )
-        x_sorted = torch.gather(x, dim=1, index=idx)
-        groups = torch.split(x_sorted, self.grp_sizes, dim=1)
-
-        x_out = [conv(g) for conv, g in zip(self.convs, groups)]
-        x_out = torch.cat(x_out, dim=1)
-        x_out = self.conv_mix(x_out)
-        x_out = x_out + self.res_proj(x)
-
-        assert x_out.shape[1] == self.N, f"Output channels ({x_out.shape[1]}) must match N ({self.N})"
-
-        return x_out
-    
-
-##########################################################################################
-
-
-# class TPConvEA(nn.Module):
-#     def __init__(self, N=80):
-#         super().__init__()
-#         self.N = N
-
-#         # same permutation as in PConvEA (used to sort channels on encode)
-#         indices = [0, 1, 4, 5, 16, 17, 20, 21,
-#                    2, 6, 8, 9, 18, 22, 24, 25,
-#                    3, 7, 10, 12, 19, 23, 26, 28,
-#                    11, 13, 14, 15, 27, 29, 30, 31]
-
-#         # input is 80 channels split into the same group sizes used in PConvEA
-#         self.N_p = [33, 29, 12, 6]
-#         self.grp_sizes = [8, 8, 8, 8]
-
-#         # build inverse permutation to reorder back to original channel order
-#         inv = torch.empty(len(indices), dtype=torch.long)
-#         for i, idx in enumerate(indices):
-#             inv[idx] = i
-
-#         self.register_buffer("inv_indices", inv)
-
-#         # Each group is deconv -> 8 output channels
-#         self.deconvs = nn.ModuleList(
-#             [deconv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.N_p, self.grp_sizes)]
-#         )
-
-#     def forward(self, x):
-#         # x: (B, 80, H, W)
-#         groups = torch.split(x, self.N_p, dim=1)
-#         out_groups = [deconv(g) for deconv, g in zip(self.deconvs, groups)]
-#         out = torch.cat(out_groups, dim=1)  # (B, 32, H, W)
-
-#         # reorder channels back to original ordering (inverse of the encoder permutation)
-#         idx = self.inv_indices.view(1, -1, 1, 1).expand_as(out)
-#         out = torch.gather(out, dim=1, index=idx)
-
-#         return out
-    
-
 # -------------------------------------------------------------
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 320, dct: bool = False, exp: int = 0):
+    def __init__(self, M: int = 256):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
 
-        if exp == 0:
-            print("Using GConv0")
-            GConv = GConv0
-        elif exp == 1:
-            print("Using GConv1")
-            GConv = GConv1
-        elif exp == 2:
-            print("Using GConv2")
-            GConv = GConv2
-        elif exp == 3:
-            print("Using GConv3")
-            GConv = GConv3
-        elif exp == 4:
-            print("Using GConv4")
-            GConv = GConv4
+        self.branch = nn.Sequential(
+            # (B, C, H, W) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
+            conv2x2_down(2, 32),
+            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-        if dct:
-            # Changed first two conv2x2_down to conv3x3_same (k3s1p1)
-            self.branch = nn.Sequential(
-                # (B, C, H, W) --> (B, C*b*b, H/b, W/b) = (B, 32, 64, 64)
-                dctLayer(block_size=4),
+            # (B, 32, H/2, W/2) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+            conv2x2_down(32, 64),
+            PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # # (B, C*b*b, H/b, W/b) --> (B, 32, H/b, W/b) = (B, 32, 64, 64)
-                # conv3x3_same(2*4*4, 32),
-                # PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            # (B, 64, H/4, W/4) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+            conv2x2_down(64, 128),
+            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 32, H/b, W/b) --> (B, 80, H/b, W/b) = (B, 80, 64, 64)
-                # conv3x3_same(32, 64),
-                # PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                GConv(N=80),
-
-                # (B, 80, H/b, W/b) --> (B, 160, H/2b, W/2b) = (B, 160, 32, 32)
-                conv2x2_down(80, 160),
-                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 160, H/2b, W/2b) --> (B, M, H/4b, W/4b) = (B, 320, 16, 16)
-                conv2x2_down(160, M),
-            )
-        else:
-            self.branch = nn.Sequential(
-                # (B, C, H, W) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
-                conv2x2_down(2, 32),
-                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 32, H/2, W/2) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
-                conv2x2_down(32, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 64, H/4, W/4) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
-                conv2x2_down(64, 128),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 128, H/8, W/8) --> (B, M, H/16, W/16) = (B, 256, 16, 16)
-                conv2x2_down(128, M),
-            )
+            # (B, 128, H/8, W/8) --> (B, M, H/16, W/16) = (B, 256, 16, 16)
+            conv2x2_down(128, M),
+        )
 
     def forward(self, x):
         return self.branch(x)
@@ -381,53 +56,28 @@ class g_a(nn.Module):
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 320, dct: bool = False):
+    def __init__(self, M: int = 256):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
 
-        if dct:
-            # Replaced last two deconv2x2_up with deconv3x3_same
-            self.branch = nn.Sequential(
-                # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
-                deconv2x2_up(M, 160),
-                PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        self.branch = nn.Sequential(
+            # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
+            deconv2x2_up(M, 128),
+            PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 160, H/8, W/8) --> (B, 80, H/4, W/4) = (B, 80, 64, 64)
-                deconv2x2_up(160, 80),
-                PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
+            deconv2x2_up(128, 64),
+            PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-                # deconv3x3_same(80, 32),
-                deconv2x2_up(80, 32), # Used when outputting I/Q directly
-                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-                # TPConvEA(N=80),
+            # (B, 64, H/4, W/4) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
+            deconv2x2_up(64, 32),
+            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
-                # # (B, 32, H/4, W/4) --> (B, C*b*b, H/4, W/4) = (B, 32, 64, 64)
-                # deconv3x3_same(32, 2*4*4),
-
-                # (B, C*b*b, H/b, W/b) --> (B, C, H, W) = (B, 2, 256, 256)
-                # idctLayer(block_size=4),
-                deconv2x2_up(32, 2), # Used when outputting I/Q directly
-            )
-        else:
-            self.branch = nn.Sequential(
-                # (B, M, H/16, W/16) --> (B, 128, H/8, W/8) = (B, 128, 32, 32)
-                deconv2x2_up(M, 128),
-                PConvRB(128, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 128, H/8, W/8) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
-                deconv2x2_up(128, 64),
-                PConvRB(64, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 64, H/4, W/4) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
-                deconv2x2_up(64, 32),
-                PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-                # (B, 32, H/2, W/2) --> (B, 2, H, W) = (B, 2, 256, 256)
-                deconv2x2_up(32, 2),
-            )
+            # (B, 32, H/2, W/2) --> (B, 2, H, W) = (B, 2, 256, 256)
+            deconv2x2_up(32, 2),
+        )
 
     def forward(self, y_hat):
         return self.branch(y_hat)
@@ -438,13 +88,13 @@ class g_s(nn.Module):
 # y -> [y0..y3] -> z  (N=192)
 # -------------------------------------------------------------
 class h_a(nn.Module):
-    def __init__(self, M: int = 320, N: int = 192):
+    def __init__(self, M: int = 256, N: int = 192):
         super().__init__()
         assert M % 4 == 0, "M must be divisible by 4."
 
         self.M = M
         self.N = N
-        self.group_ch = M // 4   # 80
+        self.group_ch = M // 4   # 64
 
         # Internal width J corresponds to Conv k2s2 64 blocks
         J = 64
@@ -499,7 +149,7 @@ class h_a(nn.Module):
 # z_hat (B,192,H/64,W/64) -> (mu, alpha) (B,256,H/16,W/16)
 # -------------------------------------------------------------
 class h_s(nn.Module):
-    def __init__(self, M: int = 320, N: int = 192):
+    def __init__(self, M: int = 256, N: int = 192):
         super().__init__()
         assert M % 4 == 0, "M must be divisible by 4."
 
@@ -562,135 +212,7 @@ class h_s(nn.Module):
         return mu, scales
 
 
-# # -------------------------------------------------------------
-# # Experiment: Uneven group sizes
-# # -------------------------------------------------------------
-# class h_a(nn.Module):
-#     def __init__(self, M: int = 256, N: int = 192):
-#         super().__init__()
-#         assert M % 4 == 0, "M must be divisible by 4."
-
-#         self.M = M
-#         self.N = N
-#         self.group_ch = [16, 32, 64, 144]  # uneven group sizes summing to 256
-
-#         # Internal width J corresponds to Conv k2s2 64 blocks
-#         J = self.group_ch
-
-#         # C0..C3: Conv k2s2 64
-#         self.c0 = conv2x2_down(self.group_ch[0], J[0])
-#         self.c1 = conv2x2_down(self.group_ch[1], J[1])
-#         self.c2 = conv2x2_down(self.group_ch[2], J[2])
-#         self.c3 = conv2x2_down(self.group_ch[3], J[3])
-
-#         mlp_ratio = 3
-#         partial_ratio = 4
-
-#         # P0 on 64 ch, P1 on 128, P2 on 192
-#         self.p0 = PConvRB(J[0], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 16
-#         self.p1 = PConvRB(J[0] + J[1], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 48
-#         self.p2 = PConvRB(J[0] + J[1] + J[2], mlp_ratio=mlp_ratio, partial_ratio=partial_ratio) # 112
-
-#         # C4: Conv k2s2 192 (input 4*J = 256 -> N = 192)
-#         self.c4 = conv2x2_down(J[0] + J[1] + J[2] + J[3], N)
-
-#     def forward(self, y):
-#         B, C, H, W = y.shape
-#         assert C == self.M
-
-#         g = self.group_ch
-#         idx = list(itertools.accumulate(g))
-#         y0 = y[:, 0:idx[0], :, :]
-#         y1 = y[:, idx[0]:idx[1], :, :]
-#         y2 = y[:, idx[1]:idx[2], :, :]
-#         y3 = y[:, idx[2]:idx[3], :, :]
-
-#         # z0 = P0(C0(y0))
-#         z0 = self.p0(self.c0(y0))                       # 16
-
-#         # z1 = P1(Cat(z0, C1(y1)))
-#         z1_in = torch.cat([z0, self.c1(y1)], dim=1)    #16 + 32 = 48
-#         z1 = self.p1(z1_in)
-
-#         # z2 = P2(Cat(z1, C2(y2)))
-#         z2_in = torch.cat([z1, self.c2(y2)], dim=1)    # 48 + 64 = 112
-#         z2 = self.p2(z2_in)
-
-#         # z = C4(Cat(z2, C3(y3)))
-#         z3_in = torch.cat([z2, self.c3(y3)], dim=1)    # 112 + 144 = 256
-#         z = self.c4(z3_in)                             # -> (B, 192, H/64, W/64)
-
-#         return z
-
-
-# # -------------------------------------------------------------
-# # Experiment: Uneven group sizes
-# # -------------------------------------------------------------
-# class h_s(nn.Module):
-#     def __init__(self, M: int = 256, N: int = 192):
-#         super().__init__()
-#         assert M % 4 == 0, "M must be divisible by 4."
-
-#         self.M = M
-#         self.N = N
-#         self.group_ch = [16, 32, 64, 144]  # uneven group sizes summing to 256
-
-#         hidden = 256               # matches TConv k2s2 256 in Fig. 2
-
-#         mlp_ratio = 3
-#         partial_ratio = 4
-
-#         # Trunk: T4 (192 -> 256, H/64 -> H/32)
-#         self.t4 = deconv2x2_up(N, hidden)
-
-#         # Three PConvRBs along the trunk (P'2, P'1, P'0)
-#         self.p2 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
-#         self.p1 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
-#         self.p0 = PConvRB(hidden, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio)
-
-#         # T0..T3: each TConv k2s2 128 in the paper
-#         # Here we output 2 * group_ch = 128 channels so that:
-#         # (mu_i, alpha_i) = split along channel dim
-#         out_ch = [2*x for x in self.group_ch]
-
-#         self.t3 = deconv2x2_up(hidden, out_ch[3])   # shallowest (uses only T4)
-#         self.t2 = deconv2x2_up(hidden, out_ch[2])   # passes P'2
-#         self.t1 = deconv2x2_up(hidden, out_ch[1])   # passes P'2 + P'1
-#         self.t0 = deconv2x2_up(hidden, out_ch[0])   # passes P'2 + P'1 + P'0
-
-#     def forward(self, z_hat):
-#         # Base feature after T4: (B,256,H/32,W/32)
-#         f3 = self.t4(z_hat)
-
-#         # Group 3 (lowest energy, shallowest path): uses T4 only
-#         out3 = self.t3(f3)
-
-#         # Group 2: extra PConvRB (P'2)
-#         f2 = self.p2(f3)
-#         out2 = self.t2(f2)
-
-#         # Group 1: P'2 + P'1
-#         f1 = self.p1(f2)
-#         out1 = self.t1(f1)
-
-#         # Group 0 (highest energy, deepest): P'2 + P'1 + P'0
-#         f0 = self.p0(f1)
-#         out0 = self.t0(f0)
-
-#         # Each out_i: (B, 2*group_ch, H/16, W/16)
-#         mu0, alpha0 = torch.chunk(out0, 2, dim=1)
-#         mu1, alpha1 = torch.chunk(out1, 2, dim=1)
-#         mu2, alpha2 = torch.chunk(out2, 2, dim=1)
-#         mu3, alpha3 = torch.chunk(out3, 2, dim=1)
-
-#         # Concatenate in the order [y0,y1,y2,y3] to align with y-channel grouping
-#         mu     = torch.cat([mu0, mu1, mu2, mu3], dim=1)
-#         scales = torch.cat([alpha0, alpha1, alpha2, alpha3], dim=1)
-
-#         return mu, scales
-
-
-
+#TODO: Unused?
 def compute_group_energy(model, x):
     with torch.no_grad():
         y = model.g_a(x)          # (1, M, H/16, W/16)
@@ -709,15 +231,14 @@ def compute_group_energy(model, x):
 # FINAL AHT MODEL
 # -------------------------------------------------------------
 class AHTModel(basemodel):
-    def __init__(self, M: int = 320, N: int = 192, dct: bool = False, exp: int = 0):
+    def __init__(self, M: int = 256, N: int = 192):
         super().__init__(N)
         
         self.M = M
         self.N = N
-        self.dct = dct
 
-        self.g_a = g_a(M, dct=self.dct, exp=exp)
-        self.g_s = g_s(M, dct=self.dct)
+        self.g_a = g_a(M)
+        self.g_s = g_s(M)
 
         self.h_a = h_a(M, N)
         self.h_s = h_s(M, N)
@@ -731,17 +252,6 @@ class AHTModel(basemodel):
             tensor[:, 2*g:3*g],
             tensor[:, 3*g:4*g],
         ]
-    
-    # def split_groups(self, tensor):
-    #     B, C, H, W = tensor.shape
-    #     g = [16, 32, 64, 144]  # uneven group sizes summing to 256
-    #     idx = list(itertools.accumulate(g))
-    #     return [
-    #         tensor[:, 0:idx[0]],
-    #         tensor[:, idx[0]:idx[1]],
-    #         tensor[:, idx[1]:idx[2]],
-    #         tensor[:, idx[2]:idx[3]],
-    #     ]
 
     def forward(self, x, size_check=False):
         # ---------------- Main analysis ----------------

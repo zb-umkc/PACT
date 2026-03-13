@@ -9,6 +9,7 @@ from datetime import date
 from tqdm import tqdm
 from PIL import Image
 from pytorch_msssim import ms_ssim, ssim
+import importlib
 
 import torch
 import torch.nn as nn
@@ -361,7 +362,6 @@ def parse_args(argv):
     parser.add_argument("--size_check", action="store_true", help="Print tensor sizes instead of training")
     parser.add_argument("--no-dct", action="store_false", default=True, dest="dct", help="Train baseline model without DCT")
     parser.add_argument("--iq_loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
-    parser.add_argument("--exp", type=int, default=0, help="Experiment number")
     args = parser.parse_args(argv)
     return args
 
@@ -451,8 +451,8 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    import importlib
-    net = importlib.import_module(f'.AHT', f'src.models').AHTModel(dct=args.dct, exp=args.exp)
+    module = ".AHT_DCT" if args.dct else ".AHT"
+    net = importlib.import_module(module, f'src.models').AHTModel()
     if args.size_check: print(net)
     net = net.to(device)
 
@@ -471,7 +471,7 @@ def main(argv):
         print("--------")
         print("WARNING: Multiple GPUs detected - do you want to use CustomDataParallel?")
         print("--------")
-        # net = CustomDataParallel(net)
+        net = CustomDataParallel(net)
 
     optimizer = optim.Adam(net.parameters(), lr=1e-3)
     criterion = RateDistortionLoss(lmbda=args.lmbda, iq_loss=args.iq_loss, alpha=args.alpha)

@@ -16,11 +16,12 @@ from torchvision.transforms import ToTensor
 from pytorch_msssim import ms_ssim
 import matplotlib.pyplot as plt
 from datetime import date
+import importlib
 
 from thop import profile
 from ptflops import get_model_complexity_info
-from src.models.AHT import AHTModel
-from src.models.AHT import compute_group_energy
+from models.AHT_DCT import AHTModel
+from models.AHT_DCT import compute_group_energy
 
 
        
@@ -158,7 +159,10 @@ def report_component_profiles(args=None, show_layers=False):
     M,N = 256,192
     H,W = 256,256
     input_ch = 2
-    model = AHTModel(M=M,N=N, dct=args.dct, exp=args.exp).eval()
+
+    module = ".AHT_DCT" if args.dct else ".AHT"
+    net = importlib.import_module(module, f'src.models').AHTModel
+    model = net(M=M,N=N).eval()
 
     x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
@@ -231,12 +235,12 @@ def test(args):
     images_list = [os.path.join(args.dataset, f) for f in images_list if f.endswith('.npy')]
 
     ##### load model
-    import importlib
-    net = importlib.import_module(f'.AHT', f'src.models').AHTModel
+    module = ".AHT_DCT" if args.dct else ".AHT"
+    net = importlib.import_module(module, f'src.models').AHTModel
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = net(dct=args.dct, exp=args.exp)
+    model = net()
     model.eval()
     model.load_state_dict(checkpoint, strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
@@ -370,7 +374,6 @@ if __name__ == '__main__':
     parser.add_argument("-num", "--num", type=int, default=60)
     parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
     parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
-    parser.add_argument("--exp", type=int, default=0, help="Experiment number")
     args = parser.parse_args()
     # print(args)
 
