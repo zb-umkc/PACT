@@ -17,14 +17,14 @@ from pytorch_msssim import ms_ssim
 import matplotlib.pyplot as plt
 from datetime import date
 import importlib
-
+from deepspeed.profiling.flops_profiler import get_model_profile
+from deepspeed.accelerator import get_accelerator
 from thop import profile
 from ptflops import get_model_complexity_info
-from models.AHT_DCT import AHTModel
-from models.AHT_DCT import compute_group_energy
+
+from src.models.AHT_DCT import compute_group_energy
 
 
-       
 def pad(x, p=2 ** 6):
     h, w = x.size(2), x.size(3)
     H = (h + p - 1) // p * p
@@ -224,6 +224,105 @@ def report_component_profiles(args=None, show_layers=False):
 
     return profiles
 
+
+def report_deepspeed_profile(args=None):
+    M,N = 256,192
+    H,W = 256,256
+    input_ch = 2
+
+    module = ".AHT_DCT" if args.dct else ".AHT"
+    net = importlib.import_module(module, f'src.models').AHTModel
+    model = net(M=M,N=N).eval()
+
+    x_shape = (1, input_ch, H, W)
+    y_shape = (1, M, H//16, W//16)
+    z_shape = (1, N, H//64, W//64)
+
+    with get_accelerator().device(0):
+        _, macs, params = get_model_profile(model=model,
+                                            input_shape=x_shape,
+                                            print_profile=True,
+                                            detailed=True,
+                                            warm_up=10,
+                                            as_string=False)
+        
+    #     _, macs_ga, params_ga = get_model_profile(model=model.g_a,
+    #                                         input_shape=x_shape,
+    #                                         print_profile=False,
+    #                                         detailed=False,
+    #                                         warm_up=10,
+    #                                         as_string=False)
+        
+    #     _, macs_gs, params_gs = get_model_profile(model=model.g_s,
+    #                                         input_shape=y_shape,
+    #                                         print_profile=False,
+    #                                         detailed=False,
+    #                                         warm_up=10,
+    #                                         as_string=False)
+        
+    #     _, macs_ha, params_ha = get_model_profile(model=model.h_a,
+    #                                         input_shape=y_shape,
+    #                                         print_profile=False,
+    #                                         detailed=False,
+    #                                         warm_up=10,
+    #                                         as_string=False)
+        
+    #     _, macs_hs, params_hs = get_model_profile(model=model.h_s,
+    #                                         input_shape=z_shape,
+    #                                         print_profile=False,
+    #                                         detailed=False,
+    #                                         warm_up=10,
+    #                                         as_string=False)
+
+    # profiles = {
+    #     "g_a": {
+    #         "macs": macs_ga,
+    #         "params": int(params_ga),
+    #     },
+    #     "g_s": {
+    #         "macs": macs_gs,
+    #         "params": int(params_gs),
+    #     },
+    #     "h_a": {
+    #         "macs": macs_ha,
+    #         "params": int(params_ha),
+    #     },
+    #     "h_s": {
+    #         "macs": macs_hs,
+    #         "params": int(params_hs),
+    #     },
+    #     "enc": {
+    #         "macs": macs_ga + macs_ha,
+    #         "params": int(params_ga + params_ha),
+    #     },
+    #     "dec": {
+    #         "macs": macs_gs + macs_hs,
+    #         "params": int(params_gs + params_hs),
+    #     },
+    #     "total": {
+    #         "macs": macs_ga + macs_ha + macs_gs + macs_hs,
+    #         "params": int(params_ga + params_ha + params_gs + params_hs),
+    #     },
+    #     "model": {
+    #         "macs": macs,
+    #         "params": int(params),
+    #     },
+    # }
+
+    # print(
+    #     f"\n--Model Params: {profiles['model']['params']} | kMAC/px: {profiles['model']['macs']/denom}"
+    #     f"\n--Total Params: {profiles['total']['params']} | kMAC/px: {profiles['total']['macs']/denom}"
+    #     f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
+    #     f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
+    #     f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
+    #     f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
+    #     f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
+    #     f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
+    # )
+
+    # return profiles
+
+
 # -------------------------------------------------------------
 # TEST starts here
 # -------------------------------------------------------------
@@ -387,6 +486,8 @@ if __name__ == '__main__':
 
     # Calculating kMACs
     denom = 256*256*1000.0
-    profiles = report_component_profiles(args=args, show_layers=False)
+    profiles = report_component_profiles(args=args, show_layers=True)
 
-    test(args)
+    profiles_ds = report_deepspeed_profile(args=args)
+
+    # test(args)
