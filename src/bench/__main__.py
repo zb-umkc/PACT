@@ -43,8 +43,7 @@ from itertools import starmap
 from pathlib import Path
 from typing import List
 
-# from .codecs import AV1, BPG, HM, JPEG, JPEG2000, TFCI, VTM, Codec, WebP
-from .codecs_sar import BPG, JPEG, SARJPEG2000, TFCI, SARVTM, SARHM, SARAV1, Codec, WebP
+from .codecs_sar import SARJPEG2000, SARVTM, SARHM, SARAV1, Codec
 
 # from torchvision.datasets.folder
 IMG_EXTENSIONS = (
@@ -60,7 +59,7 @@ IMG_EXTENSIONS = (
     ".npy",
 )
 
-codecs = [JPEG, WebP, SARJPEG2000, BPG, TFCI, SARVTM, SARHM, SARAV1]
+codecs = [SARJPEG2000, SARVTM, SARHM, SARAV1]
 
 
 # we need the quality index (not value) to compute the stats later
@@ -183,9 +182,14 @@ def main(argv):
     # Write results to CSV
     csv_filename = Path(__file__).parent.parent.parent / "results_bench.csv"
     date = datetime.now().strftime("%Y-%m-%d")
+    if "test" in args.dataset:
+        dataset = "test"
+    elif "validation" in args.dataset:
+        dataset = "val"
     
     fieldnames = [
         "codec",
+        "dataset",
         "date",
         "qp",
         "bpp",
@@ -222,6 +226,7 @@ def main(argv):
         for result_row in results:
             row = {
                 "codec": codec.name,
+                "dataset": dataset,
                 "date": date,
                 "qp": result_row.get("qp", ""),
                 "bpp": result_row.get("bpp", -1),
