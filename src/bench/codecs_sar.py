@@ -27,41 +27,16 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import abc
-import io
 import os
 import platform
 import subprocess
 import sys
 import time
 import math
-
 from tempfile import mkstemp
-from typing import Dict, List, Optional, Union
-
 import numpy as np
-import PIL
-import PIL.Image as Image
 import torch
-from torch import nn
-
-from pytorch_msssim import ms_ssim
-
-from compressai.transforms.functional import rgb2ycbcr, ycbcr2rgb
 from compressai.utils.bench.codecs import Codec, VTM, HM, AV1
-
-# from torchvision.datasets.folder
-# IMG_EXTENSIONS = (
-#     ".jpg",
-#     ".jpeg",
-#     ".png",
-#     ".ppm",
-#     ".bmp",
-#     ".pgm",
-#     ".tif",
-#     ".tiff",
-#     ".webp",
-# )
 
 
 def filesize(filepath: str) -> int:
@@ -69,13 +44,6 @@ def filesize(filepath: str) -> int:
     if not os.path.isfile(filepath):
         raise ValueError(f'Invalid file "{filepath}".')
     return os.stat(filepath).st_size
-
-
-# def read_image(filepath: str, mode: str = "RGB") -> np.array:
-#     """Return PIL image in the specified `mode` format."""
-#     if not os.path.isfile(filepath):
-#         raise ValueError(f'Invalid file "{filepath}".')
-#     return Image.open(filepath).convert(mode)
 
 
 def iq_norm(I_chan, Q_chan, min_val=-5000, max_val=5000):
@@ -91,8 +59,6 @@ def iq_to_ap(I_chan, Q_chan):
 
 
 def mse_psnr(target, pred, max_val=1):
-    # mse_loss = nn.MSELoss()
-    # mse = mse_loss(target, pred)
     mse  = float(np.mean((target - pred) ** 2))
     psnr = 10 * np.log10(max_val**2 / (mse + 1e-10))
     return mse, psnr
@@ -120,51 +86,6 @@ def mae(target, pred):
     return mae.item()
 
 
-# def _compute_psnr(a, b, max_val: float = 255.0) -> float:
-#     mse = torch.mean((a - b) ** 2).item()
-#     psnr = 20 * np.log10(max_val) - 10 * np.log10(mse)
-#     return psnr
-
-
-# def _compute_ms_ssim(a, b, max_val: float = 255.0) -> float:
-#     return ms_ssim(a, b, data_range=max_val).item()
-
-
-# _metric_functions = {
-#     "psnr-rgb": _compute_psnr,
-#     "ms-ssim-rgb": _compute_ms_ssim,
-# }
-
-
-# def compute_metrics(
-#     a: Union[np.array, Image.Image],
-#     b: Union[np.array, Image.Image],
-#     metrics: Optional[List[str]] = None,
-#     max_val: float = 255.0,
-# ) -> Dict[str, float]:
-#     """Returns PSNR and MS-SSIM between images `a` and `b`."""
-
-#     if metrics is None:
-#         metrics = ["psnr-rgb"]
-
-#     def _convert(x):
-#         if isinstance(x, Image.Image):
-#             x = np.asarray(x)
-#         x = torch.from_numpy(x.copy()).float().unsqueeze(0)
-#         if x.size(3) == 3:
-#             # (1, H, W, 3) -> (1, 3, H, W)
-#             x = x.permute(0, 3, 1, 2)
-#         return x
-
-#     a = _convert(a)
-#     b = _convert(b)
-
-#     out = {}
-#     for metric_name in metrics:
-#         out[metric_name] = _metric_functions[metric_name](a, b, max_val)
-#     return out
-
-
 def run_command(cmd, ignore_returncodes=None):
     cmd = [str(c) for c in cmd]
     try:
@@ -180,57 +101,6 @@ def run_command(cmd, ignore_returncodes=None):
 def _get_ffmpeg_version():
     rv = run_command(["ffmpeg", "-version"])
     return rv.split()[2]
-
-
-# def _get_bpg_version(encoder_path):
-#     rv = run_command([encoder_path, "-h"], ignore_returncodes=[1])
-#     return rv.split()[4]
-
-
-# class Codec(abc.ABC):
-#     """Abstract base class"""
-
-#     _description = None
-
-#     def __init__(self, args):
-#         self._set_args(args)
-
-#     def _set_args(self, args):
-#         return args
-
-#     @classmethod
-#     @abc.abstractmethod
-#     def setup_args(cls, _parser):
-#         pass
-
-#     @property
-#     def description(self):
-#         return self._description
-
-#     @property
-#     @abc.abstractmethod
-#     def name(self):
-#         raise NotImplementedError()
-
-#     def _load_img(self, img):
-#         return read_image(os.path.abspath(img))
-
-#     @abc.abstractmethod
-#     def _run_impl(self, img, quality, *args, **kwargs):
-#         raise NotImplementedError()
-
-#     def run(
-#         self,
-#         in_filepath,
-#         quality: int,
-#         metrics: Optional[List[str]] = None,
-#         return_rec: bool = False,
-#     ):
-#         info, rec = self._run_impl(in_filepath, quality)
-#         info.update(compute_metrics(rec, self._load_img(in_filepath), metrics))
-#         if return_rec:
-#             return info, rec
-#         return info
 
 
 class SARBinaryCodec(Codec):
