@@ -55,7 +55,6 @@ dependencies:
       - chainer==7.8.1
       - chardet==3.0.4
       - charset-normalizer==2.0.12
-      - compressai==1.2.9.dev0
       - cycler==0.11.0
       - cython==0.29.28
       - debugpy==1.5.1

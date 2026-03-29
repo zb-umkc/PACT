@@ -84,7 +84,7 @@ def sqnr(target, pred, neighborhood_size=5):
     noise = target - pred
     noise_power = torch.nn.functional.conv2d((noise**2), 
                                              torch.ones(1, 1, neighborhood_size, neighborhood_size))
-    sqnr = torch.mean(10*torch.log10(signal_power/neighborhood_size**2) - 10*torch.log10(noise_power/neighborhood_size**2))
+    sqnr = torch.mean(10*torch.log10((signal_power+1e-10)/(noise_power+1e-10)))
     
     return sqnr
 

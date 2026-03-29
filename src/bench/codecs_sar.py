@@ -34,6 +34,7 @@ import platform
 import subprocess
 import sys
 import time
+import math
 
 from tempfile import mkstemp
 from typing import Dict, List, Optional, Union
@@ -42,24 +43,25 @@ import numpy as np
 import PIL
 import PIL.Image as Image
 import torch
+from torch import nn
 
 from pytorch_msssim import ms_ssim
 
 from compressai.transforms.functional import rgb2ycbcr, ycbcr2rgb
-from compressai.utils.bench.codecs import BinaryCodec, JPEG2000, VTM, HM, AV1
+from compressai.utils.bench.codecs import Codec, VTM, HM, AV1
 
 # from torchvision.datasets.folder
-IMG_EXTENSIONS = (
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".ppm",
-    ".bmp",
-    ".pgm",
-    ".tif",
-    ".tiff",
-    ".webp",
-)
+# IMG_EXTENSIONS = (
+#     ".jpg",
+#     ".jpeg",
+#     ".png",
+#     ".ppm",
+#     ".bmp",
+#     ".pgm",
+#     ".tif",
+#     ".tiff",
+#     ".webp",
+# )
 
 
 def filesize(filepath: str) -> int:
@@ -69,56 +71,98 @@ def filesize(filepath: str) -> int:
     return os.stat(filepath).st_size
 
 
-def read_image(filepath: str, mode: str = "RGB") -> np.array:
-    """Return PIL image in the specified `mode` format."""
-    if not os.path.isfile(filepath):
-        raise ValueError(f'Invalid file "{filepath}".')
-    return Image.open(filepath).convert(mode)
+# def read_image(filepath: str, mode: str = "RGB") -> np.array:
+#     """Return PIL image in the specified `mode` format."""
+#     if not os.path.isfile(filepath):
+#         raise ValueError(f'Invalid file "{filepath}".')
+#     return Image.open(filepath).convert(mode)
 
 
-def _compute_psnr(a, b, max_val: float = 255.0) -> float:
-    mse = torch.mean((a - b) ** 2).item()
-    psnr = 20 * np.log10(max_val) - 10 * np.log10(mse)
-    return psnr
+def iq_norm(I_chan, Q_chan, min_val=-5000, max_val=5000):
+    I_norm = (I_chan - min_val) / (max_val - min_val)
+    Q_norm = (Q_chan - min_val) / (max_val - min_val)
+    return I_norm, Q_norm
+
+def iq_to_ap(I_chan, Q_chan):
+    amp_max_val = math.sqrt((5000 ** 2) + ((-5000) ** 2))
+    amp  = np.sqrt(I_chan**2 + Q_chan**2) / amp_max_val
+    phase = np.arctan2(Q_chan, I_chan)
+    return amp, phase
 
 
-def _compute_ms_ssim(a, b, max_val: float = 255.0) -> float:
-    return ms_ssim(a, b, data_range=max_val).item()
+def mse_psnr(target, pred, max_val=1):
+    # mse_loss = nn.MSELoss()
+    # mse = mse_loss(target, pred)
+    mse  = float(np.mean((target - pred) ** 2))
+    psnr = 10 * np.log10(max_val**2 / (mse + 1e-10))
+    return mse, psnr
 
 
-_metric_functions = {
-    "psnr-rgb": _compute_psnr,
-    "ms-ssim-rgb": _compute_ms_ssim,
-}
+def sqnr(target, pred, neighborhood_size=5):
+    device = torch.device("cpu")
+    target = torch.from_numpy(target).to(device).unsqueeze(0)
+    pred = torch.from_numpy(pred).to(device).unsqueeze(0)
+    signal_power = torch.nn.functional.conv2d((target**2), 
+                                              torch.ones(1, 1, neighborhood_size, neighborhood_size))
+    noise = target - pred
+    noise_power = torch.nn.functional.conv2d((noise**2), 
+                                             torch.ones(1, 1, neighborhood_size, neighborhood_size))
+    sqnr = torch.mean(10*torch.log10((signal_power+1e-10)/(noise_power+1e-10)))
+    
+    return sqnr.item()
 
 
-def compute_metrics(
-    a: Union[np.array, Image.Image],
-    b: Union[np.array, Image.Image],
-    metrics: Optional[List[str]] = None,
-    max_val: float = 255.0,
-) -> Dict[str, float]:
-    """Returns PSNR and MS-SSIM between images `a` and `b`."""
+def mae(target, pred):
+    device = torch.device("cpu")
+    target = torch.from_numpy(target).to(device)
+    pred = torch.from_numpy(pred).to(device)
+    mae = torch.mean(torch.abs(target - pred))
+    return mae.item()
 
-    if metrics is None:
-        metrics = ["psnr-rgb"]
 
-    def _convert(x):
-        if isinstance(x, Image.Image):
-            x = np.asarray(x)
-        x = torch.from_numpy(x.copy()).float().unsqueeze(0)
-        if x.size(3) == 3:
-            # (1, H, W, 3) -> (1, 3, H, W)
-            x = x.permute(0, 3, 1, 2)
-        return x
+# def _compute_psnr(a, b, max_val: float = 255.0) -> float:
+#     mse = torch.mean((a - b) ** 2).item()
+#     psnr = 20 * np.log10(max_val) - 10 * np.log10(mse)
+#     return psnr
 
-    a = _convert(a)
-    b = _convert(b)
 
-    out = {}
-    for metric_name in metrics:
-        out[metric_name] = _metric_functions[metric_name](a, b, max_val)
-    return out
+# def _compute_ms_ssim(a, b, max_val: float = 255.0) -> float:
+#     return ms_ssim(a, b, data_range=max_val).item()
+
+
+# _metric_functions = {
+#     "psnr-rgb": _compute_psnr,
+#     "ms-ssim-rgb": _compute_ms_ssim,
+# }
+
+
+# def compute_metrics(
+#     a: Union[np.array, Image.Image],
+#     b: Union[np.array, Image.Image],
+#     metrics: Optional[List[str]] = None,
+#     max_val: float = 255.0,
+# ) -> Dict[str, float]:
+#     """Returns PSNR and MS-SSIM between images `a` and `b`."""
+
+#     if metrics is None:
+#         metrics = ["psnr-rgb"]
+
+#     def _convert(x):
+#         if isinstance(x, Image.Image):
+#             x = np.asarray(x)
+#         x = torch.from_numpy(x.copy()).float().unsqueeze(0)
+#         if x.size(3) == 3:
+#             # (1, H, W, 3) -> (1, 3, H, W)
+#             x = x.permute(0, 3, 1, 2)
+#         return x
+
+#     a = _convert(a)
+#     b = _convert(b)
+
+#     out = {}
+#     for metric_name in metrics:
+#         out[metric_name] = _metric_functions[metric_name](a, b, max_val)
+#     return out
 
 
 def run_command(cmd, ignore_returncodes=None):
@@ -138,55 +182,55 @@ def _get_ffmpeg_version():
     return rv.split()[2]
 
 
-def _get_bpg_version(encoder_path):
-    rv = run_command([encoder_path, "-h"], ignore_returncodes=[1])
-    return rv.split()[4]
+# def _get_bpg_version(encoder_path):
+#     rv = run_command([encoder_path, "-h"], ignore_returncodes=[1])
+#     return rv.split()[4]
 
 
-class Codec(abc.ABC):
-    """Abstract base class"""
+# class Codec(abc.ABC):
+#     """Abstract base class"""
 
-    _description = None
+#     _description = None
 
-    def __init__(self, args):
-        self._set_args(args)
+#     def __init__(self, args):
+#         self._set_args(args)
 
-    def _set_args(self, args):
-        return args
+#     def _set_args(self, args):
+#         return args
 
-    @classmethod
-    @abc.abstractmethod
-    def setup_args(cls, _parser):
-        pass
+#     @classmethod
+#     @abc.abstractmethod
+#     def setup_args(cls, _parser):
+#         pass
 
-    @property
-    def description(self):
-        return self._description
+#     @property
+#     def description(self):
+#         return self._description
 
-    @property
-    @abc.abstractmethod
-    def name(self):
-        raise NotImplementedError()
+#     @property
+#     @abc.abstractmethod
+#     def name(self):
+#         raise NotImplementedError()
 
-    def _load_img(self, img):
-        return read_image(os.path.abspath(img))
+#     def _load_img(self, img):
+#         return read_image(os.path.abspath(img))
 
-    @abc.abstractmethod
-    def _run_impl(self, img, quality, *args, **kwargs):
-        raise NotImplementedError()
+#     @abc.abstractmethod
+#     def _run_impl(self, img, quality, *args, **kwargs):
+#         raise NotImplementedError()
 
-    def run(
-        self,
-        in_filepath,
-        quality: int,
-        metrics: Optional[List[str]] = None,
-        return_rec: bool = False,
-    ):
-        info, rec = self._run_impl(in_filepath, quality)
-        info.update(compute_metrics(rec, self._load_img(in_filepath), metrics))
-        if return_rec:
-            return info, rec
-        return info
+#     def run(
+#         self,
+#         in_filepath,
+#         quality: int,
+#         metrics: Optional[List[str]] = None,
+#         return_rec: bool = False,
+#     ):
+#         info, rec = self._run_impl(in_filepath, quality)
+#         info.update(compute_metrics(rec, self._load_img(in_filepath), metrics))
+#         if return_rec:
+#             return info, rec
+#         return info
 
 
 class SARBinaryCodec(Codec):
@@ -213,7 +257,7 @@ class SARBinaryCodec(Codec):
         Q_chan = data[:, :, 1].astype(np.float32)
         H, W = I_chan.shape
 
-        total_bpp = 0.0
+        total_bits = 0.0
         enc_time = 0.0
         dec_time = 0.0
         recons = []
@@ -237,7 +281,7 @@ class SARBinaryCodec(Codec):
             run_command(self._get_encode_cmd(raw_in, W, H, quality, compressed))
             enc_time += time.time() - start
 
-            total_bpp += filesize(compressed) * 8.0 / (H * W)
+            total_bits += filesize(compressed) * 8.0
 
             start = time.time()
             run_command(self._get_decode_cmd(compressed, raw_out, W, H))
@@ -251,18 +295,34 @@ class SARBinaryCodec(Codec):
             for path in (raw_in, raw_out, compressed):
                 os.unlink(path)
 
-        amp_orig  = np.sqrt(I_chan**2  + Q_chan**2)
-        amp_recon = np.sqrt(recons[0]**2 + recons[1]**2)
-        mse  = float(np.mean((amp_orig - amp_recon) ** 2))
-        psnr = 10 * np.log10(amp_orig.max()**2 / (mse + 1e-10))
-        bpp = total_bpp / 2 # Bits per pixel per band
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+
+        mse_iq, psnr_iq = mse_psnr(
+            np.stack((I_orig_norm, Q_orig_norm), axis=2), 
+            np.stack((I_recon_norm, Q_recon_norm), axis=2)
+        )
+        mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
+        sqnr_amp = sqnr(amp_orig, amp_recon)
+        mae_phase = mae(phase_orig, phase_recon)
+
+        denom = H * W * 2
+        bpp = total_bits / denom # Bits per pixel per band
 
         out = {
-            "bpp": bpp,
-            "encoding_time": enc_time,
-            "decoding_time": dec_time,
-            "psnr_amp": psnr,
+            "bpp": round(bpp, 4),
+            "encoding_time": round(enc_time, 6),
+            "decoding_time": round(dec_time, 6),
+            "mse_iq": round(mse_iq, 4),
+            "psnr_iq": round(psnr_iq, 4),
+            "mse_amp": round(mse_amp, 4),
+            "psnr_amp": round(psnr_amp, 4),
+            "sqnr_amp": round(sqnr_amp, 4),
+            "mae_phase": round(mae_phase, 4),
         }
+
         return out, tuple(recons)
 
     def _get_encode_cmd(self, in_filepath, W, H, quality, out_filepath):
@@ -344,7 +404,7 @@ class SARVTM(VTM):
         I_chan = data[:, :, 0].astype(np.float32)
         Q_chan = data[:, :, 1].astype(np.float32)
 
-        total_bpp = 0.0
+        total_bits = 0.0
         recons = []
         enc_time = 0.0
         dec_time = 0.0
@@ -390,7 +450,7 @@ class SARVTM(VTM):
             run_command(cmd)
             enc_time += time.time() - start
 
-            total_bpp += filesize(out_filepath) * 8.0 / (H * W)
+            total_bits += filesize(out_filepath) * 8.0
             os.unlink(yuv_path)
 
             # Decode
@@ -408,18 +468,32 @@ class SARVTM(VTM):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        # Amplitude PSNR instead of RGB PSNR
-        amp_orig  = np.sqrt(I_chan**2 + Q_chan**2)
-        amp_recon = np.sqrt(recons[0]**2 + recons[1]**2)
-        mse  = float(np.mean((amp_orig - amp_recon) ** 2))
-        psnr = 10 * np.log10(amp_orig.max()**2 / (mse + 1e-10))
-        bpp = total_bpp / 2 # Bits per pixel per band
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+
+        mse_iq, psnr_iq = mse_psnr(
+            np.stack((I_orig_norm, Q_orig_norm), axis=2), 
+            np.stack((I_recon_norm, Q_recon_norm), axis=2)
+        )
+        mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
+        sqnr_amp = sqnr(amp_orig, amp_recon)
+        mae_phase = mae(phase_orig, phase_recon)
+
+        denom = H * W * 2
+        bpp = total_bits / denom # Bits per pixel per band
 
         out = {
-            "bpp": bpp,
-            "encoding_time": enc_time,
-            "decoding_time": dec_time,
-            "psnr_amp": psnr,
+            "bpp": round(bpp, 4),
+            "encoding_time": round(enc_time, 6),
+            "decoding_time": round(dec_time, 6),
+            "mse_iq": round(mse_iq, 4),
+            "psnr_iq": round(psnr_iq, 4),
+            "mse_amp": round(mse_amp, 4),
+            "psnr_amp": round(psnr_amp, 4),
+            "sqnr_amp": round(sqnr_amp, 4),
+            "mae_phase": round(mae_phase, 4),
         }
 
         return out, tuple(recons)
@@ -443,7 +517,7 @@ class SARHM(HM):
         I_chan = data[:, :, 0].astype(np.float32)
         Q_chan = data[:, :, 1].astype(np.float32)
 
-        total_bpp = 0.0
+        total_bits = 0.0
         recons = []
         enc_time = 0.0
         dec_time = 0.0
@@ -477,7 +551,7 @@ class SARHM(HM):
                 "-hgt", H,
                 "-fr", "1",
                 "-f", "1",
-                "--InputChromaFormat=420",
+                "--InputChromaFormat=400",
                 f"--InputBitDepth={self.BITDEPTH}",
                 f"--InternalBitDepth={self.BITDEPTH}",
                 f"--OutputBitDepth={self.BITDEPTH}",
@@ -488,7 +562,7 @@ class SARHM(HM):
             run_command(cmd)
             enc_time += time.time() - start
 
-            total_bpp += filesize(out_filepath) * 8.0 / (H * W)
+            total_bits += filesize(out_filepath) * 8.0
             os.unlink(yuv_path)
 
             # Decode
@@ -511,18 +585,32 @@ class SARHM(HM):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        # Amplitude PSNR instead of RGB PSNR
-        amp_orig  = np.sqrt(I_chan**2 + Q_chan**2)
-        amp_recon = np.sqrt(recons[0]**2 + recons[1]**2)
-        mse  = float(np.mean((amp_orig - amp_recon) ** 2))
-        psnr = 10 * np.log10(amp_orig.max()**2 / (mse + 1e-10))
-        bpp = total_bpp / 2 # Bits per pixel per band
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+
+        mse_iq, psnr_iq = mse_psnr(
+            np.stack((I_orig_norm, Q_orig_norm), axis=2), 
+            np.stack((I_recon_norm, Q_recon_norm), axis=2)
+        )
+        mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
+        sqnr_amp = sqnr(amp_orig, amp_recon)
+        mae_phase = mae(phase_orig, phase_recon)
+
+        denom = H * W * 2
+        bpp = total_bits / denom # Bits per pixel per band
 
         out = {
-            "bpp": bpp,
-            "encoding_time": enc_time,
-            "decoding_time": dec_time,
-            "psnr_amp": psnr,
+            "bpp": round(bpp, 4),
+            "encoding_time": round(enc_time, 6),
+            "decoding_time": round(dec_time, 6),
+            "mse_iq": round(mse_iq, 4),
+            "psnr_iq": round(psnr_iq, 4),
+            "mse_amp": round(mse_amp, 4),
+            "psnr_amp": round(psnr_amp, 4),
+            "sqnr_amp": round(sqnr_amp, 4),
+            "mae_phase": round(mae_phase, 4),
         }
 
         return out, tuple(recons)
@@ -547,7 +635,7 @@ class SARAV1(AV1):
         I_chan = data[:, :, 0].astype(np.float32)
         Q_chan = data[:, :, 1].astype(np.float32)
 
-        total_bpp = 0.0
+        total_bits = 0.0
         recons = []
         enc_time = 0.0
         dec_time = 0.0
@@ -597,7 +685,7 @@ class SARAV1(AV1):
             run_command(cmd)
             enc_time = time.time() - start
 
-            total_bpp += filesize(out_filepath) * 8.0 / (H * W)
+            total_bits += filesize(out_filepath) * 8.0
 
             # cleanup encoder input
             os.close(fd)
@@ -625,18 +713,32 @@ class SARAV1(AV1):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        # Amplitude PSNR instead of RGB PSNR
-        amp_orig  = np.sqrt(I_chan**2 + Q_chan**2)
-        amp_recon = np.sqrt(recons[0]**2 + recons[1]**2)
-        mse  = float(np.mean((amp_orig - amp_recon) ** 2))
-        psnr = 10 * np.log10(amp_orig.max()**2 / (mse + 1e-10))
-        bpp = total_bpp / 2 # Bits per pixel per band
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+
+        mse_iq, psnr_iq = mse_psnr(
+            np.stack((I_orig_norm, Q_orig_norm), axis=2), 
+            np.stack((I_recon_norm, Q_recon_norm), axis=2)
+        )
+        mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
+        sqnr_amp = sqnr(amp_orig, amp_recon)
+        mae_phase = mae(phase_orig, phase_recon)
+
+        denom = H * W * 2
+        bpp = total_bits / denom # Bits per pixel per band
 
         out = {
-            "bpp": bpp,
-            "encoding_time": enc_time,
-            "decoding_time": dec_time,
-            "psnr_amp": psnr,
+            "bpp": round(bpp, 4),
+            "encoding_time": round(enc_time, 6),
+            "decoding_time": round(dec_time, 6),
+            "mse_iq": round(mse_iq, 4),
+            "psnr_iq": round(psnr_iq, 4),
+            "mse_amp": round(mse_amp, 4),
+            "psnr_amp": round(psnr_amp, 4),
+            "sqnr_amp": round(sqnr_amp, 4),
+            "mae_phase": round(mae_phase, 4),
         }
 
         return out, tuple(recons)
