@@ -199,6 +199,7 @@ def main(argv):
         "psnr_amp",
         "sqnr_amp",
         "mae_phase",
+        "mse_nrcs",
         "encoding_time",
         "decoding_time",
     ]
@@ -216,6 +217,7 @@ def main(argv):
                 "psnr_amp",
                 "sqnr_amp",
                 "mae_phase",
+                "mse_nrcs",
                 "encoding_time",
                 "decoding_time",
             ]:
@@ -242,6 +244,7 @@ def main(argv):
                 "psnr_amp": result_row.get("psnr_amp", -1),
                 "sqnr_amp": result_row.get("sqnr_amp", -1),
                 "mae_phase": result_row.get("mae_phase", -1),
+                "mse_nrcs": result_row.get("mse_nrcs", -1),
                 "encoding_time": result_row.get("encoding_time", -1),
                 "decoding_time": result_row.get("decoding_time", -1),
             }

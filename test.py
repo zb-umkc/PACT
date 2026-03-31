@@ -69,11 +69,11 @@ def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0)
 
 def psnr(a, b):
     mse_loss = nn.MSELoss()
-    mse = mse_loss(a, b)
+    mse = mse_loss(a, b).item()
     # psnr = 10 * torch.log10(1 / mse)
-    psnr = 10*np.log10(1/mse.item())
+    psnr = 10*np.log10(1/mse)
 
-    return psnr
+    return mse, psnr
 
 def sqnr(target, pred, neighborhood_size=5):
     device = torch.device("cpu")
@@ -102,7 +102,7 @@ def compute_metrics(
     # (0, 1) -> (0, 255)
     orig_iq = x
     rec_iq = torch.clamp(x_hat, 0, 1)
-    metrics["psnr_iq"] = psnr(orig_iq, rec_iq)
+    _, metrics["psnr_iq"] = psnr(orig_iq, rec_iq)
     metrics["msssim_iq"] = ms_ssim(rec_iq, orig_iq, data_range=1.0).item()
 
     ### Amp Error
@@ -116,7 +116,7 @@ def compute_metrics(
     rec_amp = torch.sqrt(torch.sum(rec_denorm ** 2, dim=1, keepdim=True))/amp_max_val
     rec_amp = torch.clamp(rec_amp, 0, 1)
 
-    metrics["psnr_amp"] = psnr(orig_amp, rec_amp)
+    _, metrics["psnr_amp"] = psnr(orig_amp, rec_amp)
     metrics["sqnr_amp"] = sqnr(orig_amp, rec_amp).item()
     metrics["msssim_amp"] = ms_ssim(rec_amp, orig_amp, data_range=1.0).item()
 
@@ -124,7 +124,10 @@ def compute_metrics(
     # I/Q -> Phase: (-pi, pi)
     orig_phase = torch.atan2(orig_denorm[0, 1, :, :], orig_denorm[0, 0, :, :])
     rec_phase = torch.atan2(rec_denorm[0, 1, :, :], rec_denorm[0, 0, :, :])
-    metrics["mae_phase"] = phase_error(orig_phase, rec_phase).item()   
+    metrics["mae_phase"] = phase_error(orig_phase, rec_phase).item()
+
+    ### NRCS Error
+    metrics["mse_nrcs"], _ = psnr(orig_amp**2, rec_amp**2)
 
     return metrics
 
@@ -352,6 +355,7 @@ def test(args):
     sqnr_amp = AverageMeter()
     msssim_amp = AverageMeter()
     mae_phase = AverageMeter()
+    mse_nrcs = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
     enc_time = AverageMeter()
@@ -412,6 +416,7 @@ def test(args):
         sqnr_amp.update(metrics["sqnr_amp"])
         msssim_amp.update(metrics["msssim_amp"])
         mae_phase.update(metrics["mae_phase"])
+        mse_nrcs.update(metrics["mse_nrcs"])
         y_bpp.update(ybpp_img)
         z_bpp.update(zbpp_img)
         enc_time.update(enc_t)
@@ -427,12 +432,12 @@ def test(args):
     test_date = date.today().strftime("%Y%m%d")
     results_filename = "results_highres.csv" if args.highres else "results.csv"
     fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
-                  "msssim_amp", "mae_phase", "enc_time", "dec_time", 
+                  "msssim_amp", "mae_phase", "mse_nrcs", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
                   "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
     write_data = {"arch": arch, "model": model, "lmbda": lmbda, "test_date": test_date, 
                   "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
-                  "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg,
+                  "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg, "mse_nrcs": mse_nrcs.avg,
                   "enc_time": enc_time.avg, "dec_time": dec_time.avg,
                   "total_kmac_per_px": profiles['total']['macs']/denom, "enc_kmac_per_px": profiles['enc']['macs']/denom, 
                   "dec_kmac_per_px": profiles['dec']['macs']/denom, "ga_kmac_per_px": profiles['g_a']['macs']/denom, 
@@ -454,6 +459,7 @@ def test(args):
         f"\n--SQNR (Amp): {sqnr_amp.avg}"
         f"\n--MS-SSIM (Amp): {msssim_amp.avg}"
         f"\n--MAE (Phase): {mae_phase.avg}"
+        f"\n--MSE (NRCS): {mse_nrcs.avg}"
         f"\n--y bpp: {y_bpp.avg}"
         f"\n--z bpp: {z_bpp.avg}"
         f"\n--enc time: {enc_time.avg}"

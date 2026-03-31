@@ -18,6 +18,9 @@
 7. Run test(s)
     - Modify test.sh as needed
     - `bash test.sh`
+8. Run benchmarking
+    - `source benchmark_setup.sh`
+    - `bash benchmark.sh test` (Use 'test', 'validation', or 'test2')
   
 ### Important Notes:
 - `train_test.sh` script can also be used to train and test each variation in a single command

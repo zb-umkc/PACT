@@ -177,6 +177,7 @@ class SARBinaryCodec(Codec):
         mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
         sqnr_amp = sqnr(amp_orig, amp_recon)
         mae_phase = mae(phase_orig, phase_recon)
+        mse_nrcs, _ = mse_psnr(amp_orig**2, amp_recon**2)
 
         denom = H * W * 2
         bpp = total_bits / denom # Bits per pixel per band
@@ -191,6 +192,7 @@ class SARBinaryCodec(Codec):
             "psnr_amp": round(psnr_amp, 4),
             "sqnr_amp": round(sqnr_amp, 4),
             "mae_phase": round(mae_phase, 4),
+            "mse_nrcs": round(mse_nrcs, 6),
         }
 
         return out, tuple(recons)
@@ -350,6 +352,7 @@ class SARVTM(VTM):
         mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
         sqnr_amp = sqnr(amp_orig, amp_recon)
         mae_phase = mae(phase_orig, phase_recon)
+        mse_nrcs, _ = mse_psnr(amp_orig**2, amp_recon**2)
 
         denom = H * W * 2
         bpp = total_bits / denom # Bits per pixel per band
@@ -364,6 +367,7 @@ class SARVTM(VTM):
             "psnr_amp": round(psnr_amp, 4),
             "sqnr_amp": round(sqnr_amp, 4),
             "mae_phase": round(mae_phase, 4),
+            "mse_nrcs": round(mse_nrcs, 6),
         }
 
         return out, tuple(recons)
@@ -467,6 +471,7 @@ class SARHM(HM):
         mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
         sqnr_amp = sqnr(amp_orig, amp_recon)
         mae_phase = mae(phase_orig, phase_recon)
+        mse_nrcs, _ = mse_psnr(amp_orig**2, amp_recon**2)
 
         denom = H * W * 2
         bpp = total_bits / denom # Bits per pixel per band
@@ -481,6 +486,7 @@ class SARHM(HM):
             "psnr_amp": round(psnr_amp, 4),
             "sqnr_amp": round(sqnr_amp, 4),
             "mae_phase": round(mae_phase, 4),
+            "mse_nrcs": round(mse_nrcs, 6),
         }
 
         return out, tuple(recons)
@@ -595,6 +601,7 @@ class SARAV1(AV1):
         mse_amp, psnr_amp = mse_psnr(amp_orig, amp_recon)
         sqnr_amp = sqnr(amp_orig, amp_recon)
         mae_phase = mae(phase_orig, phase_recon)
+        mse_nrcs, _ = mse_psnr(amp_orig**2, amp_recon**2)
 
         denom = H * W * 2
         bpp = total_bits / denom # Bits per pixel per band
@@ -609,6 +616,7 @@ class SARAV1(AV1):
             "psnr_amp": round(psnr_amp, 4),
             "sqnr_amp": round(sqnr_amp, 4),
             "mae_phase": round(mae_phase, 4),
+            "mse_nrcs": round(mse_nrcs, 6),
         }
 
         return out, tuple(recons)
