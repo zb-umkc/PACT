@@ -133,12 +133,12 @@ class RateDistortionLoss(nn.Module):
         out["amp_loss"] = torch.log(local_mse + self.eps).mean()
 
         if self.iq_loss == "mse":
-            out["distortion_loss"] = (self.alpha * 255**2 * out["mse_loss"]) + out["amp_loss"]
+            out["distortion_loss"] = (self.alpha * 255**2 * out["mse_loss"]) + ((1 - self.alpha) * out["amp_loss"])
             out["loss"] = self.lmbda * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
 
         elif self.iq_loss == "l1_ssim":
             out["iq_loss"] = (out["l1_loss"] + out["ssim_loss"]) / 2
-            out["distortion_loss"] = (self.alpha * 255**2 * out["iq_loss"]) + out["amp_loss"]
+            out["distortion_loss"] = (self.alpha * 255**2 * out["iq_loss"]) + ((1 - self.alpha) * out["amp_loss"])
             out["loss"] = self.lmbda * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
 
         return out
@@ -339,12 +339,13 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example training script.")
-    parser.add_argument("--model_name", type=str, default="AHT")
-    parser.add_argument("--model_class", type=str, default="hypers")
+    parser.add_argument("--model_name", type=str, default="PACT")
+    # parser.add_argument("--model_class", type=str, default="hypers")
+    parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
     parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train", help="Training dataset")
     parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train_val", help="Testing dataset")
     parser.add_argument("-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
-    parser.add_argument("-lr", "--learning-rate", default=1e-4, type=float, help="Learning rate (default: %(default)s)")
+    parser.add_argument("-lr", "--learning-rate", default=1e-3, type=float, help="Learning rate (default: %(default)s)")
     parser.add_argument("-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
     parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
     parser.add_argument("--alpha", dest="alpha", type=float, default=1.0, help="Distortion loss weight parameter (default: %(default)s)")
@@ -354,14 +355,18 @@ def parse_args(argv):
     parser.add_argument("--patch-size", type=int, nargs=2, default=(256, 256), help="Size of the patches to be cropped (default: %(default)s)")
     parser.add_argument("--cuda", default=True, help="Use cuda")
     parser.add_argument("--save", action="store_true", default=True, help="Save model to disk")
-    parser.add_argument("--save_path", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save model")
-    parser.add_argument("--log_dir", type=str, default="/scratch/zb7df/checkpoints/AHT_DCT/", help="Where to Save logs")
+    parser.add_argument("--save_path", type=str, default="/scratch/zb7df/checkpoints/PACT/", help="Where to Save model")
+    parser.add_argument("--log_dir", type=str, default="/scratch/zb7df/checkpoints/PACT/", help="Where to Save logs")
     parser.add_argument("--seed", type=float, help="Set random seed for reproducibility")
     parser.add_argument("--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
     parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
+    parser.add_argument("--resume-optimizer", action="store_true", help="Load optimizer state from the checkpoint")
+    parser.add_argument("--resume-scheduler", action="store_true", help="Load scheduler state from the checkpoint")
+    parser.add_argument("--reset-lr", action="store_true", help="Reset optimizer learning rate to --learning-rate even when resuming from checkpoint")
     parser.add_argument("--size_check", action="store_true", help="Print tensor sizes instead of training")
-    parser.add_argument("--no-dct", action="store_false", default=True, dest="dct", help="Train baseline model without DCT")
+    # parser.add_argument("--no-dct", action="store_false", default=True, dest="dct", help="Train baseline model without DCT")
     parser.add_argument("--iq_loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
+    parser.add_argument("-g", "--groups", type=int, default=4, help="Number of groups for GConv in g_a (default: %(default)s)")
     args = parser.parse_args(argv)
     return args
 
@@ -395,6 +400,8 @@ def main(argv):
     print(args)
     # today = date.today().strftime("%Y%m%d")
     run_name = f"{args.model_name}_lmbda{str(args.lmbda)}"
+    if args.checkpoint:
+        args.checkpoint = os.path.join(args.save_path, args.checkpoint)
     args.log_dir = os.path.join(args.log_dir, run_name)
     args.save_path = os.path.join(args.save_path, run_name)
     if args.seed is not None:
@@ -451,8 +458,11 @@ def main(argv):
         pin_memory=(device == "cuda"),
     )
 
-    module = ".AHT_DCT" if args.dct else ".AHT"
-    net = importlib.import_module(module, f'src.models').AHTModel()
+    if args.architecture == "PACT":
+        net = importlib.import_module(".PACT", f'src.models').PACTModel(G=args.groups)
+    else:
+        net = importlib.import_module(".AHT", f'src.models').AHTModel()
+
     if args.size_check: print(net)
     net = net.to(device)
 
@@ -473,7 +483,7 @@ def main(argv):
         print("--------")
         net = CustomDataParallel(net)
 
-    optimizer = optim.Adam(net.parameters(), lr=1e-3)
+    optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     criterion = RateDistortionLoss(lmbda=args.lmbda, iq_loss=args.iq_loss, alpha=args.alpha)
     scheduler = ReduceLROnPlateau(
         optimizer,
@@ -484,14 +494,42 @@ def main(argv):
     )
     early_stopping = EarlyStopping(patience=20, delta=1e-3)
 
+    best_loss = float("inf")
+    global_step = 0
+    last_periodic_ckpt = None
+    if args.checkpoint:
+        print(f"Loading checkpoint: {args.checkpoint}")
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        if isinstance(checkpoint, dict) and "model" in checkpoint:
+            net.load_state_dict(checkpoint["model"])
+        else:
+            net.load_state_dict(checkpoint)
+
+        if args.resume_optimizer and isinstance(checkpoint, dict) and "optimizer" in checkpoint:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            if args.reset_lr:
+                for param_group in optimizer.param_groups:
+                    param_group["lr"] = args.learning_rate
+
+        if args.resume_scheduler and isinstance(checkpoint, dict) and "scheduler" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler"])
+
+        if args.reset_lr and not args.resume_optimizer:
+            for param_group in optimizer.param_groups:
+                param_group["lr"] = args.learning_rate
+
+        if isinstance(checkpoint, dict) and "epoch" in checkpoint:
+            last_epoch = checkpoint["epoch"] + 1
+        if isinstance(checkpoint, dict) and "best_loss" in checkpoint:
+            best_loss = checkpoint["best_loss"]
+        if isinstance(checkpoint, dict) and "global_step" in checkpoint:
+            global_step = checkpoint["global_step"]
+
     if args.size_check:
         writer = None
     else:
         writer = SummaryWriter(args.log_dir)
 
-    best_loss = float("inf")
-    global_step = 0
-    last_periodic_ckpt = None
     for epoch in range(last_epoch, args.epochs):
         start_time = time.time()
         if not args.size_check:
@@ -522,14 +560,23 @@ def main(argv):
             is_best = loss < best_loss
             best_loss = min(loss, best_loss)
 
+            checkpoint = {
+                "epoch": epoch,
+                "model": net.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "scheduler": scheduler.state_dict(),
+                "best_loss": best_loss,
+                "global_step": global_step,
+            }
+
             if is_best:
-                torch.save(net.state_dict(), os.path.join(args.save_path, 'epoch_' +'best' + '.pth.tar'))
+                torch.save(checkpoint, os.path.join(args.save_path, 'epoch_best.pth.tar'))
 
             if epoch % 50 == 0:
                 periodic_path = os.path.join(args.save_path, f'epoch_{epoch}.pth.tar')
                 if last_periodic_ckpt and os.path.exists(last_periodic_ckpt):
                     os.remove(last_periodic_ckpt)
-                torch.save(net.state_dict(), periodic_path)
+                torch.save(checkpoint, periodic_path)
                 last_periodic_ckpt = periodic_path
 
             epoch_time = time.time() - start_time

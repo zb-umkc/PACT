@@ -22,7 +22,7 @@ from deepspeed.accelerator import get_accelerator
 from thop import profile
 from ptflops import get_model_complexity_info
 
-from src.models.AHT_DCT import compute_group_energy
+from src.models.PACT import compute_group_energy
 
 
 def pad(x, p=2 ** 6):
@@ -163,9 +163,12 @@ def report_component_profiles(args=None, show_layers=False):
     H,W = 256,256
     input_ch = 2
 
-    module = ".AHT_DCT" if args.dct else ".AHT"
-    net = importlib.import_module(module, f'src.models').AHTModel
-    model = net(M=M,N=N).eval()
+    if args.architecture == "PACT":
+        net = importlib.import_module(".PACT", f'src.models').PACTModel
+    else:
+        net = importlib.import_module(".AHT", f'src.models').AHTModel
+
+    model = net(M=M, N=N, G=args.groups).eval()
 
     x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
@@ -207,6 +210,14 @@ def report_component_profiles(args=None, show_layers=False):
         },
     }
 
+    if show_layers:
+        _, _ = get_model_complexity_info(
+            model, 
+            (input_ch, H, W), 
+            as_strings=True, 
+            print_per_layer_stat=True,
+        )
+    
     print(
         f"\n--Total Params | kMAC/px: {profiles['total']['params']} | {profiles['total']['macs']/denom}"
         f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
@@ -217,113 +228,106 @@ def report_component_profiles(args=None, show_layers=False):
         f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
     )
 
-    if show_layers:
-        _, _ = get_model_complexity_info(
-            model, 
-            (input_ch, H, W), 
-            as_strings=True, 
-            print_per_layer_stat=True,
-        )
-
     return profiles
 
 
-def report_deepspeed_profile(args=None):
+def report_deepspeed_profile(args=None, show_layers=False):
     M,N = 256,192
     H,W = 256,256
     input_ch = 2
 
-    module = ".AHT_DCT" if args.dct else ".AHT"
-    net = importlib.import_module(module, f'src.models').AHTModel
-    model = net(M=M,N=N).eval()
+    if args.architecture == "PACT":
+        net = importlib.import_module(".PACT", f'src.models').PACTModel
+    else:
+        net = importlib.import_module(".AHT", f'src.models').AHTModel
+
+    model = net(M=M, N=N, G=args.groups).eval()
 
     x_shape = (1, input_ch, H, W)
     y_shape = (1, M, H//16, W//16)
     z_shape = (1, N, H//64, W//64)
 
-    with get_accelerator().device(0):
-        _, macs, params = get_model_profile(model=model,
+    with get_accelerator().device(0):       
+        _, macs_ga, params_ga = get_model_profile(model=model.g_a,
                                             input_shape=x_shape,
-                                            print_profile=True,
-                                            detailed=True,
+                                            print_profile=False,
+                                            detailed=False,
                                             warm_up=10,
                                             as_string=False)
         
-    #     _, macs_ga, params_ga = get_model_profile(model=model.g_a,
-    #                                         input_shape=x_shape,
-    #                                         print_profile=False,
-    #                                         detailed=False,
-    #                                         warm_up=10,
-    #                                         as_string=False)
+        _, macs_gs, params_gs = get_model_profile(model=model.g_s,
+                                            input_shape=y_shape,
+                                            print_profile=False,
+                                            detailed=False,
+                                            warm_up=10,
+                                            as_string=False)
         
-    #     _, macs_gs, params_gs = get_model_profile(model=model.g_s,
-    #                                         input_shape=y_shape,
-    #                                         print_profile=False,
-    #                                         detailed=False,
-    #                                         warm_up=10,
-    #                                         as_string=False)
+        _, macs_ha, params_ha = get_model_profile(model=model.h_a,
+                                            input_shape=y_shape,
+                                            print_profile=False,
+                                            detailed=False,
+                                            warm_up=10,
+                                            as_string=False)
         
-    #     _, macs_ha, params_ha = get_model_profile(model=model.h_a,
-    #                                         input_shape=y_shape,
-    #                                         print_profile=False,
-    #                                         detailed=False,
-    #                                         warm_up=10,
-    #                                         as_string=False)
-        
-    #     _, macs_hs, params_hs = get_model_profile(model=model.h_s,
-    #                                         input_shape=z_shape,
-    #                                         print_profile=False,
-    #                                         detailed=False,
-    #                                         warm_up=10,
-    #                                         as_string=False)
+        _, macs_hs, params_hs = get_model_profile(model=model.h_s,
+                                            input_shape=z_shape,
+                                            print_profile=False,
+                                            detailed=False,
+                                            warm_up=10,
+                                            as_string=False)
 
-    # profiles = {
-    #     "g_a": {
-    #         "macs": macs_ga,
-    #         "params": int(params_ga),
-    #     },
-    #     "g_s": {
-    #         "macs": macs_gs,
-    #         "params": int(params_gs),
-    #     },
-    #     "h_a": {
-    #         "macs": macs_ha,
-    #         "params": int(params_ha),
-    #     },
-    #     "h_s": {
-    #         "macs": macs_hs,
-    #         "params": int(params_hs),
-    #     },
-    #     "enc": {
-    #         "macs": macs_ga + macs_ha,
-    #         "params": int(params_ga + params_ha),
-    #     },
-    #     "dec": {
-    #         "macs": macs_gs + macs_hs,
-    #         "params": int(params_gs + params_hs),
-    #     },
-    #     "total": {
-    #         "macs": macs_ga + macs_ha + macs_gs + macs_hs,
-    #         "params": int(params_ga + params_ha + params_gs + params_hs),
-    #     },
-    #     "model": {
-    #         "macs": macs,
-    #         "params": int(params),
-    #     },
-    # }
+    profiles = {
+        "g_a": {
+            "macs": macs_ga,
+            "params": int(params_ga),
+        },
+        "g_s": {
+            "macs": macs_gs,
+            "params": int(params_gs),
+        },
+        "h_a": {
+            "macs": macs_ha,
+            "params": int(params_ha),
+        },
+        "h_s": {
+            "macs": macs_hs,
+            "params": int(params_hs),
+        },
+        "enc": {
+            "macs": macs_ga + macs_ha,
+            "params": int(params_ga + params_ha),
+        },
+        "dec": {
+            "macs": macs_gs + macs_hs,
+            "params": int(params_gs + params_hs),
+        },
+        "total": {
+            "macs": macs_ga + macs_ha + macs_gs + macs_hs,
+            "params": int(params_ga + params_ha + params_gs + params_hs),
+        },
+    }
 
-    # print(
-    #     f"\n--Model Params: {profiles['model']['params']} | kMAC/px: {profiles['model']['macs']/denom}"
-    #     f"\n--Total Params: {profiles['total']['params']} | kMAC/px: {profiles['total']['macs']/denom}"
-    #     f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
-    #     f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
-    #     f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
-    #     f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
-    #     f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
-    #     f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
-    # )
+    if show_layers:
+        _, _, _ = get_model_profile(
+            model=model,
+            input_shape=x_shape,
+            print_profile=True,
+            detailed=True,
+            warm_up=10,
+            as_string=False
+        )
 
-    # return profiles
+    print(
+        f"\n--Total Params: {profiles['total']['params']} | kMAC/px: {profiles['total']['macs']/denom}"
+        f"\n----Encoder: {profiles['enc']['params']} | {profiles['enc']['macs']/denom}"
+        f"\n------g_a: {profiles['g_a']['params']} | {profiles['g_a']['macs']/denom}"
+        f"\n------h_a: {profiles['h_a']['params']} | {profiles['h_a']['macs']/denom}"
+        f"\n----Decoder: {profiles['dec']['params']} | {profiles['dec']['macs']/denom}"
+        f"\n------g_s: {profiles['g_s']['params']} | {profiles['g_s']['macs']/denom}"
+        f"\n------h_s: {profiles['h_s']['params']} | {profiles['h_s']['macs']/denom}"
+    )
+
+    return profiles
 
 
 # -------------------------------------------------------------
@@ -337,12 +341,14 @@ def test(args):
     images_list = [os.path.join(args.dataset, f) for f in images_list if f.endswith('.npy')]
 
     ##### load model
-    module = ".AHT_DCT" if args.dct else ".AHT"
-    net = importlib.import_module(module, f'src.models').AHTModel
+    if args.architecture == "PACT":
+        net = importlib.import_module(".PACT", f'src.models').PACTModel
+    else:
+        net = importlib.import_module(".AHT", f'src.models').AHTModel
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = net()
+    model = net(G=args.groups)
     model.eval()
     model.load_state_dict(checkpoint, strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
@@ -474,26 +480,28 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser(description="Example training script.")
     parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
-    parser.add_argument("--run_name", type=str, default="AHT")
+    parser.add_argument("--run_name", type=str, default="PACT")
     parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
     parser.add_argument("-num", "--num", type=int, default=60)
     parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
-    parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
+    # parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
+    parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
+    parser.add_argument("-g", "--groups", type=int, default=4, help="Number of groups for GConv in g_a (default: %(default)s)")
     args = parser.parse_args()
     # print(args)
 
     pol = "HH"
     args.highres = True if "test" in args.dataset.split("/")[-1] else False
     args.dataset = f"{args.dataset}/gt_{pol}"
-    args.checkpoint = f"/scratch/zb7df/checkpoints/AHT_DCT/{args.run_name}/{args.checkpoint}"
-    # args.checkpoint = f"/home/zb7df/dev/AHT_DCT/training_logs/{args.run_name}/{args.checkpoint}"
-    if "DCT" in args.run_name:
-        args.dct = True
+    args.checkpoint = f"/scratch/zb7df/checkpoints/PACT/{args.run_name}/{args.checkpoint}"
+    # args.checkpoint = f"/home/zb7df/dev/PACT/training_logs/{args.run_name}/{args.checkpoint}"
+    # if "DCT" in args.run_name:
+    #     args.dct = True
 
     # Calculating kMACs
     denom = 256*256*1000.0
-    profiles = report_component_profiles(args=args, show_layers=True)
 
-    profiles_ds = report_deepspeed_profile(args=args)
+    # profiles = report_component_profiles(args=args, show_layers=False)
+    profiles = report_deepspeed_profile(args=args, show_layers=False)
 
-    # test(args)
+    test(args)

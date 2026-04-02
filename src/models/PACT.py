@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import itertools
+import numpy as np
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
@@ -21,15 +22,38 @@ class PadLayer(nn.Module):
 
 
 class GConv(nn.Module):
-    def __init__(self, N=80):
+    def __init__(self, N=80, G=4):
         super().__init__()
         self.N = N
-        self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
+        self.G = G
+        indices = [
+            5, 21, 20, 17, 1, 4, 16, 0,
+            25, 9, 22, 6, 24, 8, 2, 18,
+            26, 10, 29, 28, 13, 12, 23, 3,
+            19, 7, 30, 27, 14, 11, 31, 15
+        ]
+        energy_props = np.array([
+            0.05243656, 0.05239884, 0.05199771, 0.05199648, 0.05196691, 0.05195392, 0.05158095, 0.05138119,
+            0.04503353, 0.04499872, 0.04497314, 0.04494835, 0.04471355, 0.04467467, 0.04463650, 0.04462454,
+            0.03771098, 0.03760796, 0.01270533, 0.01268872, 0.01268246, 0.01266787, 0.01266614, 0.01264959,
+            0.01264733, 0.01264714, 0.01057431, 0.01054387, 0.01051681, 0.01048368, 0.00345573, 0.00343664
+        ])
+        group_size = int(32 / self.G)
+        groups_var = [energy_props[i:i+group_size] for i in range(0, len(energy_props), group_size)]
+        group_energy_var_props = [group.sum() for group in groups_var]
+
+        self.N_p = [int(round(prop * self.N)) for prop in group_energy_var_props]
+        self.N_p = self.adjust_filters()
+        # ch_adj = self.N - sum(self.N_p)
+        # self.N_p[0] += ch_adj
+
+
+        # self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
         # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-                   2, 6, 8, 9, 18, 22, 24, 25, 
-                   3, 7, 10, 12, 19, 23, 26, 28, 
-                   11, 13, 14, 15, 27, 29, 30, 31]
+        # indices = [0, 1, 4, 5, 16, 17, 20, 21, 
+        #            2, 6, 8, 9, 18, 22, 24, 25, 
+        #            3, 7, 10, 12, 19, 23, 26, 28, 
+        #            11, 13, 14, 15, 27, 29, 30, 31]
         # indices = [
         #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
         #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
@@ -39,7 +63,7 @@ class GConv(nn.Module):
         #     15, 31                        # Grp 6
         # ]
         self.indices = torch.tensor(indices)
-        self.grp_sizes = [8, 8, 8, 8]
+        self.grp_sizes = [group_size] * self.G
         # self.grp_sizes = [8, 8, 2, 8, 4, 2]
 
         self.convs = nn.ModuleList(
@@ -62,12 +86,37 @@ class GConv(nn.Module):
 
         return x_out
     
+    def adjust_filters(self):
+        for i in reversed(range(len(self.N_p))):
+            if self.N_p[i] == 0:
+                self.N_p[i] += 1
+            else:
+                break
+
+        tot = sum(self.N_p)
+        if tot <= self.N:
+            diff = self.N - tot
+            self.N_p[0] += diff
+        else:
+            diff = tot - self.N
+            for j in reversed(range(len(self.N_p))):
+                if self.N_p[j] > 1:
+                    self.N_p[j] -= 1
+                    diff -= 1
+                    if diff <= 0:
+                        break
+
+        assert sum(self.N_p) == self.N, f"Sum of filters ({sum(self.N_p)}) does not equal N={self.N}"
+        
+        return self.N_p
+
+    
 
 # -------------------------------------------------------------
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 320):
+    def __init__(self, M: int = 320, G: int = 4):
         super().__init__()
 
         mlp_ratio = 3
@@ -78,7 +127,7 @@ class g_a(nn.Module):
             dctLayer(block_size=4),
 
             # (B, C*b*b, H/b, W/b) --> (B, 80, H/b, W/b) = (B, 80, 64, 64)
-            GConv(N=80),
+            GConv(N=80, G=G),
 
             # (B, 80, H/b, W/b) --> (B, 160, H/2b, W/2b) = (B, 160, 32, 32)
             conv2x2_down(80, 160),
@@ -269,16 +318,17 @@ def compute_group_energy(model, x):
 
 
 # -------------------------------------------------------------
-# FINAL AHT MODEL
+# FINAL PACT MODEL
 # -------------------------------------------------------------
-class AHTModel(basemodel):
-    def __init__(self, M: int = 320, N: int = 192):
+class PACTModel(basemodel):
+    def __init__(self, M: int = 320, N: int = 192, G: int = 4):
         super().__init__(N)
         
         self.M = M
         self.N = N
+        self.G = G
 
-        self.g_a = g_a(M)
+        self.g_a = g_a(M, G)
         self.g_s = g_s(M)
 
         self.h_a = h_a(M, N)
