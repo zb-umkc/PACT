@@ -14,7 +14,7 @@
 6. Launch Tensorboard
     - Open new terminal
     - `conda activate aht`
-    - `tensorboard --logdir /scratch/zb7df/checkpoints/AHT_DCT`
+    - `tensorboard --logdir /scratch/zb7df/checkpoints/PACT`
 7. Run test(s)
     - Modify test.sh as needed
     - `bash test.sh`

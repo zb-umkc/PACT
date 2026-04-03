@@ -507,11 +507,13 @@ def main(argv):
 
         if args.resume_optimizer and isinstance(checkpoint, dict) and "optimizer" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer"])
+            print(f"Loading optimizer state from checkpoint: LR={optimizer.param_groups[0]['lr']}")
             if args.reset_lr:
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = args.learning_rate
 
         if args.resume_scheduler and isinstance(checkpoint, dict) and "scheduler" in checkpoint:
+            print("Loading scheduler state from checkpoint")
             scheduler.load_state_dict(checkpoint["scheduler"])
 
         if args.reset_lr and not args.resume_optimizer:
@@ -530,7 +532,7 @@ def main(argv):
     else:
         writer = SummaryWriter(args.log_dir)
 
-    for epoch in range(last_epoch, args.epochs):
+    for epoch in range(last_epoch, (last_epoch + args.epochs)):
         start_time = time.time()
         if not args.size_check:
             print(f"\nStarting epoch {epoch}")

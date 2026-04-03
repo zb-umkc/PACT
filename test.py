@@ -350,7 +350,7 @@ def test(args):
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model = net(G=args.groups)
     model.eval()
-    model.load_state_dict(checkpoint, strict=True)
+    model.load_state_dict(checkpoint["model"], strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
     model = model.to(device)
 
