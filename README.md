@@ -1,4 +1,4 @@
-# Instructions for UMKC SSE Cluster
+# Helpful Commands
 1. Create conda environment (if needed)
     - `conda env create -f environment.yml`
 2. Activate conda environment
@@ -8,17 +8,14 @@
     - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
 4. Test model configuration before training
     - `python train.py --size_check [other_args]`
-5. Train model(s)
-    - Modify train.sh as needed
-    - `bash train.sh`
+5. Train/test model(s)
+    - Modify train_test.sh as needed
+    - `bash train_test.sh`
 6. Launch Tensorboard
     - Open new terminal
     - `conda activate aht`
     - `tensorboard --logdir /scratch/zb7df/checkpoints/PACT`
-7. Run test(s)
-    - Modify test.sh as needed
-    - `bash test.sh`
-8. Run benchmarking
+7. Run benchmarking
     - `source benchmark_setup.sh`
     - `bash benchmark.sh test` (Use 'test', 'validation', or 'test2')
   
