@@ -1,8 +1,8 @@
-# Instructions for testing on UMKC SSE Cluster
+# Instructions for UMKC SSE Cluster
 1. Create conda environment (if needed)
     - `conda env create -f environment.yml`
 2. Activate conda environment
-    - `conda activate aht`
+    - `conda activate pact`
 3. Set up SSH for GitHub push/pull access
     - `source ssh.sh`
     - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
@@ -23,15 +23,8 @@
     - `bash benchmark.sh test` (Use 'test', 'validation', or 'test2')
   
 ### Important Notes:
-- `train_test.sh` script can also be used to train and test each variation in a single command
-- `--dct` flag adds DCT and Inverse DCT layers to architecture (AHT-DCT)
-- `--dist` argument determines I/Q distortion loss used during training (either MSE or L1-SSIM loss)
-- `--alpha` is the weight parameter for L1-SSIM loss (default 0.5)
-- The NGA dataset I was given included 10,000 training patches, 1,000 validation patches, and 1 high-res test image. My ELIC-DCT work instead uses the following:
-    - 9,000 training patches (from train)
-    - 1,000 validation patches (from train)
-    - 1,000 testing patches (from validation)
-    - The code creating these splits is located at the end of the elic_dct_rle.ipynb notebook.
+- `train_test.sh` script contains 2-stage training process for I/Q and Amp loss
+- The NGA dataset used here includes 9,000 training patches, 1,000 validation patches, 1,000 256x256 test patches, and 2 1024x1024 test images. 
 
 ### Overleaf Projects:
 - TBD

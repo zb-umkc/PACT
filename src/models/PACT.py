@@ -44,27 +44,8 @@ class GConv(nn.Module):
 
         self.N_p = [int(round(prop * self.N)) for prop in group_energy_var_props]
         self.N_p = self.adjust_filters()
-        # ch_adj = self.N - sum(self.N_p)
-        # self.N_p[0] += ch_adj
-
-
-        # self.N_p = [33, 29, 12, 6] # From hard-coded indices (80 ch)
-        # self.N_p = [33, 29, 6, 8, 3, 1] # From hard-coded indices (80 ch, uneven groups)
-        # indices = [0, 1, 4, 5, 16, 17, 20, 21, 
-        #            2, 6, 8, 9, 18, 22, 24, 25, 
-        #            3, 7, 10, 12, 19, 23, 26, 28, 
-        #            11, 13, 14, 15, 27, 29, 30, 31]
-        # indices = [
-        #     0, 1, 4, 5, 16, 17, 20, 21,   # Grp 1
-        #     2, 6, 8, 9, 18, 22, 24, 25,   # Grp 2
-        #     10, 26,                       # Grp 3
-        #     3, 7, 12, 13, 19, 23, 28, 29, # Grp 4
-        #     11, 14, 27, 30,               # Grp 5
-        #     15, 31                        # Grp 6
-        # ]
         self.indices = torch.tensor(indices)
         self.grp_sizes = [group_size] * self.G
-        # self.grp_sizes = [8, 8, 2, 8, 4, 2]
 
         self.convs = nn.ModuleList(
             [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
