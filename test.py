@@ -21,6 +21,7 @@ from deepspeed.profiling.flops_profiler import get_model_profile
 from deepspeed.accelerator import get_accelerator
 from thop import profile
 from ptflops import get_model_complexity_info
+import sarpy.io.general.nitf as nitf
 
 from src.models.PACT import compute_group_energy
 
@@ -57,12 +58,61 @@ def crop(x, size):
 def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0):
     # W x H x C
     img_np = np.load(filepath).astype(np.float32)
+
     # C x W x H
     img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
     
     img = torch.tensor(img_np, dtype=torch.float32).unsqueeze(0)
     img = (img - min_val) / (max_val - min_val)
     return img
+
+def load_image_nitf(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0):
+
+    sar_data         = nitf.NITFReader(filepath)
+    sar_image        = sar_data.read_raw()
+    with open(filepath, "rb") as f:
+        sar_header   = f.read(sar_data.nitf_details.img_segment_offsets[0])
+        
+        if 0:
+            print("\n****************\n")
+            print(sar_header)
+            print("\n****************\n")
+        f.seek(sar_data.nitf_details.des_subheader_offsets[0])
+        sar_metadata = f.read()
+        
+        if 0:
+            print("\n****************\n")
+            print(sar_metadata)
+            print("\n****************\n")
+        
+    sar_image        = np.clip(sar_image, min_val, max_val)
+    # sar_image        = (sar_image - min_val) / (max_val - min_val)
+    sar_image        = torch.tensor(sar_image).permute(2, 0, 1)
+
+    c, h, w = sar_image.shape
+    ps = 64
+
+    # Calculate padding required along each dimension
+    pad_y = (ps - (h % ps)) % ps
+    pad_x = (ps - (w % ps)) % ps
+
+    # Pad the image using reflection (mirror) padding
+    padding = (0, pad_x, 0, pad_y)  # (left, right, top, bottom)
+    gt_sar = F.pad(sar_image, padding, mode='reflect').permute(1, 2, 0)
+
+    # return {
+    #     "img": sar_image,
+    #     "sar_header": sar_header,
+    #     "sar_metadata": sar_metadata
+    # }
+
+    print(f"SHAPE: {gt_sar.shape}, MIN: {gt_sar.min()}, MAX: {gt_sar.max()}")
+
+    # Export as .npy
+    np.save(filepath.replace(".nitf", ".npy"), gt_sar.numpy())
+    sys.exit()
+
+    return gt_sar.unsqueeze(0)
 
 # def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255):
 #     return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
@@ -339,6 +389,7 @@ def test(args):
     images_list = os.listdir(os.path.abspath(args.dataset))
     assert len(images_list) > 0, f"No files found in {args.dataset}"
     images_list = [os.path.join(args.dataset, f) for f in images_list if f.endswith('.npy')]
+    # images_list = [os.path.join(args.dataset, f) for f in images_list]
 
     ##### load model
     if args.architecture == "PACT":
@@ -351,8 +402,6 @@ def test(args):
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
     model.eval()
-    #TODO
-    # model.load_state_dict(checkpoint, strict=True)
     model.load_state_dict(checkpoint["model"], strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
     model = model.to(device)
@@ -376,7 +425,11 @@ def test(args):
     energy_4 = AverageMeter()
 
     for img_path in tqdm(sorted(images_list)):
-        x = load_image(img_path)
+        if img_path.endswith("nitf"):
+            x = load_image_nitf(img_path, min_val=args.min_val, max_val=args.max_val)
+        else:
+            x = load_image(img_path, min_val=args.min_val, max_val=args.max_val)
+
         c, h, w = x.shape[1], x.shape[2], x.shape[3]
         x = x.to(device)
         # p = 256
@@ -439,7 +492,14 @@ def test(args):
     model = args.run_name.split("_")[1]
     lmbda = float(args.run_name.split("_")[-1].replace("lmbda", ""))
     test_date = date.today().strftime("%Y%m%d")
-    results_filename = "results_highres.csv" if args.highres else "results.csv"
+
+    if "test" in args.dataset.split("/")[-2]:
+        results_filename = "results_highres.csv"
+    elif "full" in args.dataset.split("/")[-2]:
+        results_filename = "results_full.csv"
+    else:
+        results_filename = "results.csv"
+
     fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
                   "msssim_amp", "mae_phase", "mse_nrcs", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
@@ -494,8 +554,17 @@ if __name__ == '__main__':
     # print(args)
 
     pol = "HH"
-    args.highres = True if "test" in args.dataset.split("/")[-1] else False
-    args.dataset = f"{args.dataset}/gt_{pol}"
+    if args.dataset.split("/")[-3] == "NGA":
+        args.dataset = f"{args.dataset}/gt_{pol}"
+        args.min_val = -5000.0
+        args.max_val = 5000.0
+    elif args.dataset.split("/")[-2] == "Sandia":
+        args.dataset = f"{args.dataset}/gt"
+        args.min_val = -500.0
+        args.max_val = 500.0
+    else:
+        raise ValueError("Unknown dataset structure. Please check the data_path.")
+        
     args.checkpoint = f"/scratch/zb7df/checkpoints/PACT/{args.run_name}/{args.checkpoint}"
     # args.checkpoint = f"/home/zb7df/dev/PACT/training_logs/{args.run_name}/{args.checkpoint}"
     # if "DCT" in args.run_name:

@@ -2,7 +2,7 @@
 1. Create conda environment (if needed)
     - `conda env create -f environment.yml`
 2. Activate conda environment
-    - `conda activate pact`
+    - `conda activate aht`
 3. Set up SSH for GitHub push/pull access
     - `source ssh.sh`
     - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
@@ -17,7 +17,7 @@
     - `tensorboard --logdir /scratch/zb7df/checkpoints/PACT`
 7. Run benchmarking
     - `source benchmark_setup.sh`
-    - `bash benchmark.sh test` (Use 'test', 'validation', or 'test2')
+    - `bash benchmark.sh test` (Use 'full', 'test', 'validation', or 'test2')
   
 ### Important Notes:
 - `train_test.sh` script contains 2-stage training process for I/Q and Amp loss

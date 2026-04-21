@@ -186,6 +186,8 @@ def main(argv):
         dataset = "test"
     elif "validation" in args.dataset:
         dataset = "val"
+    elif "full" in args.dataset:
+        dataset = "full"
     
     fieldnames = [
         "codec",

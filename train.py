@@ -22,12 +22,20 @@ from torch.utils.tensorboard import SummaryWriter
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, data_path, pol, transform):
-        self.data_dir = f"{data_path}/gt_{pol}"
+        if data_path.split("/")[-3] == "NGA":
+            self.data_dir = f"{data_path}/gt_{pol}"
+            self.min_val = -5000.0
+            self.max_val = 5000.0
+        elif data_path.split("/")[-2] == "Sandia":
+            self.data_dir = f"{data_path}/gt"
+            self.min_val = -500.0
+            self.max_val = 500.0
+        else:
+            raise ValueError("Unknown dataset structure. Please check the data_path.")
+        
         self.dataset_list = [f for f in os.listdir(self.data_dir) if os.path.isfile(os.path.join(self.data_dir, f))]
         self.transform = transform
-        self.min_val = -5000.0
-        self.max_val = 5000.0
-
+        
     def __len__(self):
         return len(self.dataset_list)
 
@@ -35,6 +43,7 @@ class Dataset(torch.utils.data.Dataset):
         image_path = os.path.join(self.data_dir, self.dataset_list[idx])
         # W x H x C
         img_np = np.load(image_path).astype(np.float32)
+
         # C x W x H
         img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
         
