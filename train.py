@@ -477,11 +477,11 @@ def main(argv):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = True
 
-    if args.cuda and torch.cuda.device_count() > 1:
-        print("--------")
-        print("WARNING: Multiple GPUs detected - do you want to use CustomDataParallel?")
-        print("--------")
-        net = CustomDataParallel(net)
+    # if args.cuda and torch.cuda.device_count() > 1:
+    #     print("--------")
+    #     print("WARNING: Multiple GPUs detected - do you want to use CustomDataParallel?")
+    #     print("--------")
+    #     net = CustomDataParallel(net)
 
     optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
     criterion = RateDistortionLoss(lmbda=args.lmbda, iq_loss=args.iq_loss, alpha=args.alpha)

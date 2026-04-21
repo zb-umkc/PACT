@@ -238,10 +238,10 @@ def report_deepspeed_profile(args=None, show_layers=False):
 
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
+        model = net(M=M, N=N, G=args.groups).eval()
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
-
-    model = net(M=M, N=N, G=args.groups).eval()
+        model = net(M=M, N=N).eval()
 
     x_shape = (1, input_ch, H, W)
     y_shape = (1, M, H//16, W//16)
@@ -343,13 +343,16 @@ def test(args):
     ##### load model
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
+        model = net(G=args.groups)
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
+        model = net()
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
-    model = net(G=args.groups)
     model.eval()
+    #TODO
+    # model.load_state_dict(checkpoint, strict=True)
     model.load_state_dict(checkpoint["model"], strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
     model = model.to(device)
@@ -434,7 +437,7 @@ def test(args):
 
     arch = args.run_name.split("_")[0]
     model = args.run_name.split("_")[1]
-    lmbda = float(args.run_name.split("_")[2].replace("lmbda", ""))
+    lmbda = float(args.run_name.split("_")[-1].replace("lmbda", ""))
     test_date = date.today().strftime("%Y%m%d")
     results_filename = "results_highres.csv" if args.highres else "results.csv"
     fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 

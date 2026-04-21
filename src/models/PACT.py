@@ -38,15 +38,20 @@ class GConv(nn.Module):
             0.03771098, 0.03760796, 0.01270533, 0.01268872, 0.01268246, 0.01266787, 0.01266614, 0.01264959,
             0.01264733, 0.01264714, 0.01057431, 0.01054387, 0.01051681, 0.01048368, 0.00345573, 0.00343664
         ])
-        group_size = int(32 / self.G)
-        groups_var = [energy_props[i:i+group_size] for i in range(0, len(energy_props), group_size)]
-        group_energy_var_props = [group.sum() for group in groups_var]
 
-        self.N_p = [int(round(prop * self.N)) for prop in group_energy_var_props]
-        self.N_p = self.adjust_filters()
+        if self.G == 6:
+            self.N_p = [33, 29, 6, 8, 3, 1]
+            self.grp_sizes = [8, 8, 2, 8, 4, 2]
+        else:
+            group_size = int(32 / self.G)
+            groups_var = [energy_props[i:i+group_size] for i in range(0, len(energy_props), group_size)]
+            group_energy_var_props = [group.sum() for group in groups_var]
+
+            self.N_p = [int(round(prop * self.N)) for prop in group_energy_var_props]
+            self.N_p = self.adjust_filters()
+            self.grp_sizes = [group_size] * self.G
+
         self.indices = torch.tensor(indices)
-        self.grp_sizes = [group_size] * self.G
-
         self.convs = nn.ModuleList(
             [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
         )
