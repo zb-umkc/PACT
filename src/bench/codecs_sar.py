@@ -51,8 +51,8 @@ def iq_norm(I_chan, Q_chan, min_val=-5000, max_val=5000):
     Q_norm = (Q_chan - min_val) / (max_val - min_val)
     return I_norm, Q_norm
 
-def iq_to_ap(I_chan, Q_chan):
-    amp_max_val = math.sqrt((5000 ** 2) + ((-5000) ** 2))
+def iq_to_ap(I_chan, Q_chan, min_val=-5000, max_val=5000):
+    amp_max_val = math.sqrt((max_val ** 2) + ((min_val) ** 2))
     amp  = np.sqrt(I_chan**2 + Q_chan**2) / amp_max_val
     phase = np.arctan2(Q_chan, I_chan)
     return amp, phase

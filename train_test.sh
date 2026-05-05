@@ -14,13 +14,12 @@
 
 # For Sandia data
 lambdas=(
-    # "0.005,0.375"
-    # "0.0067,0.5"
-    # "0.0083,0.6225"
-    "0.01,0.75"
-    # "0.0125,0.9375"
-    # "0.015,1.125"
-    # "0.0175,1.3125"
+    "0.0008,0.0625"
+    "0.0016,0.125"
+    "0.0033,0.25"
+    "0.0067,0.5"
+    "0.0175,1.3125"
+    # "0.03,2.25" # <-- Still needs trained
 )
 
 for pair in "${lambdas[@]}"; do
@@ -28,8 +27,8 @@ for pair in "${lambdas[@]}"; do
 
     for groups in 8; do
 
-        # Phase 1: Optimize for I/Q only (alpha=1.0)
-        echo "PHASE 1: Lambda=${lmbda1} | Groups=${groups}"
+        # # Phase 1: Optimize for I/Q only (alpha=1.0)
+        # echo "PHASE 1: Lambda=${lmbda1} | Groups=${groups}"
         # python train.py \
         #     --lambda "${lmbda1}" \
         #     --alpha 1.0 \
@@ -40,14 +39,14 @@ for pair in "${lambdas[@]}"; do
         #     -te_d "/scratch/zb7df/data/Sandia/validation" \
         #     --model_name PACTsandia_g${groups}alpha1.0
 
-        python test.py \
-            --lambda "${lmbda1}" \
-            -g "${groups}" \
-            --run_name "PACTsandia_g${groups}alpha1.0_lmbda${lmbda1}" \
-            -data "/scratch/zb7df/data/Sandia/test"
+        # python test.py \
+        #     --lambda "${lmbda1}" \
+        #     -g "${groups}" \
+        #     --run_name "PACTsandia_g${groups}alpha1.0_lmbda${lmbda1}" \
+        #     -data "/scratch/zb7df/data/Sandia/test"
 
-        # Phase 2: Fine-tune for Amplitude only (alpha=0.0)
-        echo "PHASE 2: Lambda=${lmbda2} | Groups=${groups}"
+        # # Phase 2: Fine-tune for Amplitude only (alpha=0.0)
+        # echo "PHASE 2: Lambda=${lmbda2} | Groups=${groups}"
         # python train.py \
         #     --lambda "${lmbda2}" \
         #     --alpha 0.01 \
@@ -65,7 +64,7 @@ for pair in "${lambdas[@]}"; do
             --lambda "${lmbda2}" \
             -g "${groups}" \
             --run_name "PACTsandia_g${groups}alpha0.01_lmbda${lmbda2}" \
-            -data "/scratch/zb7df/data/Sandia/test"
+            -data "/scratch/zb7df/data/Sandia/full"
 
     done
 

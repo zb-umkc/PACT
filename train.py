@@ -23,10 +23,12 @@ from torch.utils.tensorboard import SummaryWriter
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, data_path, pol, transform):
         if data_path.split("/")[-3] == "NGA":
+            print("NGA Dataset Detected")
             self.data_dir = f"{data_path}/gt_{pol}"
             self.min_val = -5000.0
             self.max_val = 5000.0
         elif data_path.split("/")[-2] == "Sandia":
+            print("Sandia Dataset Detected")
             self.data_dir = f"{data_path}/gt"
             self.min_val = -500.0
             self.max_val = 500.0
@@ -78,7 +80,7 @@ class LocalLogMSELoss(nn.Module):
 class RateDistortionLoss(nn.Module):
     """Custom rate distortion loss with a Lagrangian parameter."""
 
-    def __init__(self, lmbda=1e-2, iq_loss="mse", alpha=1.0, kernel_size=5, eps=1e-8):
+    def __init__(self, lmbda=1e-2, iq_loss="mse", alpha=1.0, kernel_size=5, eps=1e-8, min_val=-5000.0, max_val=5000.0):
         super().__init__()
         self.iq_loss = iq_loss
         self.mse = nn.MSELoss()
@@ -89,14 +91,18 @@ class RateDistortionLoss(nn.Module):
         self.alpha = alpha
         self.kernel_size = kernel_size
         self.eps = eps
+        self.min_val = min_val
+        self.max_val = max_val
 
-    def convert_to_amp(self, output_iq, target_iq):
+        print(f"Loss Min/Max: {self.min_val}/{self.max_val}")
+
+    def convert_to_amp(self, output_iq, target_iq, min_val, max_val):
         output_iq = torch.clamp(output_iq, 0, 1)
 
-        # (0, 1) -> (-5000, 5000)
-        target_denorm = (target_iq * 10000) - 5000
-        output_denorm = (output_iq * 10000) - 5000
-        amp_max_val = torch.sqrt(torch.tensor(5000 ** 2 + (-5000) ** 2))
+        # (0, 1) -> (min_val, max_val)
+        target_denorm = (target_iq * (max_val - min_val)) + min_val
+        output_denorm = (output_iq * (max_val - min_val)) + min_val
+        amp_max_val = torch.sqrt(torch.tensor(max_val ** 2 + (min_val) ** 2))
 
         # I/Q -> Amplitude: (0, 1)
         target_amp = torch.sqrt(torch.sum(target_denorm ** 2, dim=1, keepdim=True))/amp_max_val
@@ -132,7 +138,7 @@ class RateDistortionLoss(nn.Module):
         out["ssim_loss"] = 1 - _ssim
 
         # Calculate the Amp Loss (based on SQNR)
-        output_amp, target_amp = self.convert_to_amp(output["x_hat"], target)
+        output_amp, target_amp = self.convert_to_amp(output["x_hat"], target, self.min_val, self.max_val)
         sq_error = (target_amp - output_amp) ** 2
         local_mse = F.avg_pool2d(
             sq_error,
@@ -493,7 +499,13 @@ def main(argv):
     #     net = CustomDataParallel(net)
 
     optimizer = optim.Adam(net.parameters(), lr=args.learning_rate)
-    criterion = RateDistortionLoss(lmbda=args.lmbda, iq_loss=args.iq_loss, alpha=args.alpha)
+    criterion = RateDistortionLoss(
+        lmbda=args.lmbda,
+        iq_loss=args.iq_loss,
+        alpha=args.alpha,
+        min_val=train_dataset.min_val,
+        max_val=train_dataset.max_val
+    )
     scheduler = ReduceLROnPlateau(
         optimizer,
         mode="min",

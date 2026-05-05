@@ -144,6 +144,8 @@ def phase_error(phase1, phase2):
 def compute_metrics(
         x: torch.Tensor,
         x_hat: torch.Tensor,
+        min_val: float,
+        max_val: float
     ) -> Dict[str, Any]:
 
     metrics: Dict[str, Any] = {}
@@ -157,9 +159,9 @@ def compute_metrics(
 
     ### Amp Error
     # (0, 1) -> (-5000, 5000)
-    orig_denorm = (x * 10000) - 5000
-    rec_denorm = (x_hat * 10000) - 5000
-    amp_max_val = torch.sqrt(torch.tensor(5000 ** 2 + (-5000) ** 2))
+    orig_denorm = (x * (max_val - min_val)) + min_val
+    rec_denorm = (x_hat * (max_val - min_val)) + min_val
+    amp_max_val = torch.sqrt(torch.tensor(max_val ** 2 + min_val ** 2))
 
     # I/Q -> Amplitude: (0, 1)
     orig_amp = torch.sqrt(torch.sum(orig_denorm ** 2, dim=1, keepdim=True))/amp_max_val
@@ -460,7 +462,10 @@ def test(args):
         # Image.fromarray(save_rec.numpy()).save(f"{args.dataset}output/recon_{img_name}")
 
         # metrics = compute_metrics(x, x_hat, mode="iq") # Calculate in I/Q format
-        metrics = compute_metrics(x, x_hat)
+        print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
+        print(f"x min: {x.min()}, x max: {x.max()}")
+        print(f"x_hat min: {x_hat.min()}, x_hat max: {x_hat.max()}")
+        metrics = compute_metrics(x, x_hat, args.min_val, args.max_val)
 
         # msssim = ms_ssim(x_hat, x, data_range=1.0)
         # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
@@ -555,13 +560,17 @@ if __name__ == '__main__':
 
     pol = "HH"
     if args.dataset.split("/")[-3] == "NGA":
+        print("NGA Dataset Detected")
         args.dataset = f"{args.dataset}/gt_{pol}"
         args.min_val = -5000.0
         args.max_val = 5000.0
+        print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
     elif args.dataset.split("/")[-2] == "Sandia":
+        print("Sandia Dataset Detected")
         args.dataset = f"{args.dataset}/gt"
         args.min_val = -500.0
         args.max_val = 500.0
+        print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
     else:
         raise ValueError("Unknown dataset structure. Please check the data_path.")
         
