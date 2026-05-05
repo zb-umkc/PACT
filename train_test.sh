@@ -14,12 +14,12 @@
 
 # For Sandia data
 lambdas=(
-    "0.0008,0.0625"
-    "0.0016,0.125"
-    "0.0033,0.25"
-    "0.0067,0.5"
-    "0.0175,1.3125"
-    # "0.03,2.25" # <-- Still needs trained
+    # "0.0008,0.0625"
+    # "0.0016,0.125"
+    # "0.0033,0.25"
+    # "0.0067,0.5"
+    # "0.0175,1.3125"
+    "0.03,2.25" # <-- Still needs trained
 )
 
 for pair in "${lambdas[@]}"; do
@@ -39,11 +39,11 @@ for pair in "${lambdas[@]}"; do
         #     -te_d "/scratch/zb7df/data/Sandia/validation" \
         #     --model_name PACTsandia_g${groups}alpha1.0
 
-        # python test.py \
-        #     --lambda "${lmbda1}" \
-        #     -g "${groups}" \
-        #     --run_name "PACTsandia_g${groups}alpha1.0_lmbda${lmbda1}" \
-        #     -data "/scratch/zb7df/data/Sandia/test"
+        python test.py \
+            --lambda "${lmbda1}" \
+            -g "${groups}" \
+            --run_name "PACTsandia_g${groups}alpha1.0_lmbda${lmbda1}" \
+            -data "/scratch/zb7df/data/Sandia/test"
 
         # # Phase 2: Fine-tune for Amplitude only (alpha=0.0)
         # echo "PHASE 2: Lambda=${lmbda2} | Groups=${groups}"
@@ -60,6 +60,12 @@ for pair in "${lambdas[@]}"; do
         #     --learning-rate 1e-4 \
         #     --reset-lr
             
+        python test.py \
+            --lambda "${lmbda2}" \
+            -g "${groups}" \
+            --run_name "PACTsandia_g${groups}alpha0.01_lmbda${lmbda2}" \
+            -data "/scratch/zb7df/data/Sandia/test"
+
         python test.py \
             --lambda "${lmbda2}" \
             -g "${groups}" \
