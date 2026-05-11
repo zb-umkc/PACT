@@ -10,6 +10,7 @@ import numpy as np
 from tqdm import tqdm
 from PIL import Image
 from typing import Dict, Any
+import torch
 from torch import nn
 import torch.nn.functional as F
 from torchvision.transforms import ToTensor
@@ -22,6 +23,7 @@ from deepspeed.accelerator import get_accelerator
 from thop import profile
 from ptflops import get_model_complexity_info
 import sarpy.io.general.nitf as nitf
+from skimage.exposure import match_histograms, adjust_gamma
 
 from src.models.PACT import compute_group_energy
 
@@ -113,6 +115,35 @@ def load_image_nitf(filepath: str, min_val: float = -5000.0, max_val: float = 50
     sys.exit()
 
     return gt_sar.unsqueeze(0)
+
+
+def transform_sandia_to_nga(I, Q, nga_reference, use_gamma=False):
+    """Forward transform: Sandia I/Q -> NGA-domain I/Q"""
+    orig_amp = np.sqrt(I**2 + Q**2)
+
+    if use_gamma:
+        # adjust_gamma expects [0, 1] input
+        amp_norm = orig_amp / (orig_amp.max() + 1e-8)
+        matched_amp_norm = adjust_gamma(amp_norm, gamma=0.5)  # tune this
+        matched_amp = matched_amp_norm * nga_reference.max()
+    else:
+        matched_amp = match_histograms(orig_amp, nga_reference)
+
+    # Preserve phase, apply new amplitude
+    scale = np.where(orig_amp > 1e-8, matched_amp / orig_amp, 0.0)
+    
+    return I * scale, Q * scale, orig_amp, matched_amp
+
+
+def inverse_transform(recon_I, recon_Q, orig_amp, matched_amp):
+    """Inverse transform: NGA-domain reconstruction -> Sandia domain"""
+    recon_amp = np.sqrt(recon_I**2 + recon_Q**2)
+    # Invert the amplitude mapping using original and matched as reference
+    inverted_amp = match_histograms(recon_amp, orig_amp)
+    scale = np.where(recon_amp > 1e-8, inverted_amp / recon_amp, 0.0)
+    
+    return recon_I * scale, recon_Q * scale
+
 
 # def psnr(a: torch.Tensor, b: torch.Tensor, max_val: int = 255):
 #     return 20 * math.log10(max_val) - 10 * torch.log10((a - b).pow(2).mean())
@@ -400,6 +431,9 @@ def test(args):
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
         model = net()
+
+    if args.adapt:
+        nga_reference = np.load("/scratch/zb7df/data/NGA/nga_reference.npy")
     
     print("Loading", args.checkpoint)
     checkpoint = torch.load(args.checkpoint, map_location=device)
@@ -432,6 +466,14 @@ def test(args):
         else:
             x = load_image(img_path, min_val=args.min_val, max_val=args.max_val)
 
+        if args.adapt:
+            I, Q = x[0], x[1]
+            I_t, Q_t, orig_amp, matched_amp = transform_sandia_to_nga(I, Q, nga_reference)
+
+            # Inference
+            x = torch.tensor(np.stack([I_t, Q_t]), dtype=torch.float32).unsqueeze(0)
+            print(x.shape)
+
         c, h, w = x.shape[1], x.shape[2], x.shape[3]
         x = x.to(device)
         # p = 256
@@ -455,11 +497,18 @@ def test(args):
         dec_t = time.time() - dec_start
         # x_hat = crop(out_dec["x_hat"], (h,w))
         x_hat = out_dec["x_hat"]  # REMOVED CROP
+
+        if args.adapt:
+            I_hat, Q_hat = inverse_transform(
+                x_hat[0], x_hat[1], orig_amp, matched_amp
+            )
+            x_hat = torch.stack([I_hat, Q_hat], dim=0).unsqueeze(0)
+
+            print(x_hat.shape)
         
-        
-        # # Save reconstruction
-        # save_rec = (x_hat.clamp(0,1) * 255).round().byte().cpu().squeeze(0).permute(1,2,0)
-        # Image.fromarray(save_rec.numpy()).save(f"{args.dataset}output/recon_{img_name}")
+        # # Save reconstructed I/Q for visualization
+        # save_rec = x_hat.clamp(0,1).float().cpu().squeeze(0).permute(1,2,0).numpy()
+        # np.save(f"recon/{img_name}", save_rec)
 
         # metrics = compute_metrics(x, x_hat, mode="iq") # Calculate in I/Q format
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
@@ -555,6 +604,7 @@ if __name__ == '__main__':
     # parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
     parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
     parser.add_argument("-g", "--groups", type=int, default=4, help="Number of groups for GConv in g_a (default: %(default)s)")
+    parser.add_argument("--adapt", action="store_true", help="Adapt the model to the input data")
     args = parser.parse_args()
     # print(args)
 
@@ -574,7 +624,8 @@ if __name__ == '__main__':
     else:
         raise ValueError("Unknown dataset structure. Please check the data_path.")
         
-    args.checkpoint = f"/scratch/zb7df/checkpoints/PACT/{args.run_name}/{args.checkpoint}"
+    #TODO: Remove kc-sse-ml-rn04
+    args.checkpoint = f"/scratch/zb7df/kc-sse-ml-rn04/checkpoints/PACT/{args.run_name}/{args.checkpoint}"
     # args.checkpoint = f"/home/zb7df/dev/PACT/training_logs/{args.run_name}/{args.checkpoint}"
     # if "DCT" in args.run_name:
     #     args.dct = True

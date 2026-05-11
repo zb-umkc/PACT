@@ -88,8 +88,21 @@ def collect(
         print("No images found in the dataset directory")
         sys.exit(1)
 
+    if "NGA" in dataset:
+        print("NGA Dataset Detected")
+        min_val = -5000.0
+        max_val = 5000.0
+        print(f"Min Val: {min_val}, Max Val: {max_val}")
+    elif "Sandia" in dataset:
+        print("Sandia Dataset Detected")
+        min_val = -500.0
+        max_val = 500.0
+        print(f"Min Val: {min_val}, Max Val: {max_val}")
+    else:
+        raise ValueError("Unknown dataset structure. Please check the data_path.")
+
     args = [
-        (codec, i, f, q, metrics) for i, q in enumerate(qps) for f in sorted(filepaths)
+        (codec, i, f, q, metrics, min_val, max_val) for i, q in enumerate(qps) for f in sorted(filepaths)
     ]
 
     if pool:

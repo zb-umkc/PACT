@@ -115,13 +115,21 @@ class SARBinaryCodec(Codec):
     def setup_args(cls, _parser):
         pass
 
-    def run(self, in_filepath, quality, metrics=None, return_rec=False):
-        info, rec = self._run_impl(in_filepath, quality)
+    def run(
+            self,
+            in_filepath,
+            quality,
+            metrics=None,
+            min_val=-5000,
+            max_val=5000,
+            return_rec=False,
+        ):
+        info, rec = self._run_impl(in_filepath, quality, min_val, max_val)
         if return_rec:
             return info, rec
         return info
 
-    def _run_impl(self, in_filepath, quality):
+    def _run_impl(self, in_filepath, quality, min_val, max_val):
         data = np.load(in_filepath)
         I_chan = data[:, :, 0].astype(np.float32)
         Q_chan = data[:, :, 1].astype(np.float32)
@@ -165,10 +173,10 @@ class SARBinaryCodec(Codec):
             for path in (raw_in, raw_out, compressed):
                 os.unlink(path)
 
-        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
-        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
-        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
-        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan, min_val, max_val)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1], min_val, max_val)
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan, min_val, max_val)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1], min_val, max_val)
 
         mse_iq, psnr_iq = mse_psnr(
             np.stack((I_orig_norm, Q_orig_norm), axis=2), 
@@ -263,14 +271,22 @@ class SARVTM(VTM):
     BITDEPTH = 12
     MAX_VAL = (1 << BITDEPTH) - 1  # 4095
 
-    def run(self, in_filepath, quality, metrics=None, return_rec=False):
+    def run(
+            self, 
+            in_filepath,
+            quality,
+            metrics=None,
+            min_val=-5000,
+            max_val=5000,
+            return_rec=False,
+        ):
         # Override to skip the PIL-based compute_metrics call in base class
-        info, rec = self._run_impl(in_filepath, quality)
+        info, rec = self._run_impl(in_filepath, quality, min_val, max_val)
         if return_rec:
             return info, rec
         return info
 
-    def _run_impl(self, in_filepath, quality):
+    def _run_impl(self, in_filepath, quality, min_val, max_val):
         # Load I and Q channels from .npy instead of PIL image
         data = np.load(in_filepath)
         I_chan = data[:, :, 0].astype(np.float32)
@@ -340,10 +356,10 @@ class SARVTM(VTM):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
-        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
-        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
-        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan, min_val, max_val)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1], min_val, max_val)
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan, min_val, max_val)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1], min_val, max_val)
 
         mse_iq, psnr_iq = mse_psnr(
             np.stack((I_orig_norm, Q_orig_norm), axis=2), 
@@ -370,6 +386,10 @@ class SARVTM(VTM):
             "mse_nrcs": round(mse_nrcs, 6),
         }
 
+        # # Save reconstructed I/Q for visualization
+        # save_rec = np.stack((I_recon_norm, Q_recon_norm), axis=2)
+        # np.save(f"recon/vvc_29.npy", save_rec)
+
         return out, tuple(recons)
 
 
@@ -378,14 +398,22 @@ class SARHM(HM):
     BITDEPTH = 10
     MAX_VAL = (1 << BITDEPTH) - 1  # 1023
 
-    def run(self, in_filepath, quality, metrics=None, return_rec=False):
+    def run(
+            self,
+            in_filepath,
+            quality,
+            metrics=None,
+            min_val=-5000,
+            max_val=5000,
+            return_rec=False,
+        ):
         # Override to skip the PIL-based compute_metrics call in base class
-        info, rec = self._run_impl(in_filepath, quality)
+        info, rec = self._run_impl(in_filepath, quality, min_val, max_val)
         if return_rec:
             return info, rec
         return info
 
-    def _run_impl(self, in_filepath, quality):
+    def _run_impl(self, in_filepath, quality, min_val, max_val):
         # Load I and Q channels from .npy instead of PIL image
         data = np.load(in_filepath)
         I_chan = data[:, :, 0].astype(np.float32)
@@ -459,10 +487,10 @@ class SARHM(HM):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
-        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
-        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
-        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan, min_val, max_val)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1], min_val, max_val)
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan, min_val, max_val)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1], min_val, max_val)
 
         mse_iq, psnr_iq = mse_psnr(
             np.stack((I_orig_norm, Q_orig_norm), axis=2), 
@@ -498,14 +526,22 @@ class SARAV1(AV1):
     BITDEPTH = 12
     MAX_VAL = (1 << BITDEPTH) - 1  # 4095
 
-    def run(self, in_filepath, quality, metrics=None, return_rec=False):
+    def run(
+            self,
+            in_filepath,
+            quality,
+            metrics=None,
+            min_val=-5000,
+            max_val=5000,
+            return_rec=False,
+        ):
         # Override to skip the PIL-based compute_metrics call in base class
-        info, rec = self._run_impl(in_filepath, quality)
+        info, rec = self._run_impl(in_filepath, quality, min_val, max_val)
         if return_rec:
             return info, rec
         return info
 
-    def _run_impl(self, in_filepath, quality):
+    def _run_impl(self, in_filepath, quality, min_val, max_val):
         # Load I and Q channels from .npy instead of PIL image
         data = np.load(in_filepath)
         I_chan = data[:, :, 0].astype(np.float32)
@@ -589,10 +625,10 @@ class SARAV1(AV1):
             os.unlink(recon_path)
             os.unlink(out_filepath)
 
-        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan)
-        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1])
-        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan)
-        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1])
+        I_orig_norm, Q_orig_norm = iq_norm(I_chan, Q_chan, min_val, max_val)
+        I_recon_norm, Q_recon_norm = iq_norm(recons[0], recons[1], min_val, max_val)
+        amp_orig, phase_orig = iq_to_ap(I_chan, Q_chan, min_val, max_val)
+        amp_recon, phase_recon = iq_to_ap(recons[0], recons[1], min_val, max_val)
 
         mse_iq, psnr_iq = mse_psnr(
             np.stack((I_orig_norm, Q_orig_norm), axis=2), 
