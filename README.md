@@ -2,7 +2,12 @@
 1. Create conda environment (if needed)
     - `conda env create -f environment.yml`
 2. Activate conda environment
-    - `conda activate aht`
+    - `conda activate pact`
+3. Download datasets (if needed)
+    - `hf download --repo-type dataset umkc-mcc/nga --local-dir /scratch/zb7df/data/nga`
+    - `hf download --repo-type dataset umkc-mcc/sandia --local-dir /scratch/zb7df/data/sandia`
+4. Download models (if needed)
+    - `hf download zb-umkc/sar-pact --local-dir /scratch/zb7df/models/sar-pact`
 3. Set up SSH for GitHub push/pull access
     - `source ssh.sh`
     - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
@@ -13,7 +18,7 @@
     - `bash train_test.sh`
 6. Launch Tensorboard
     - Open new terminal
-    - `conda activate aht`
+    - `conda activate pact`
     - `tensorboard --logdir /scratch/zb7df/checkpoints/PACT`
 7. Run benchmarking
     - `source benchmark_setup.sh`

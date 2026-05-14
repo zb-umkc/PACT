@@ -31,7 +31,7 @@ class g_a(nn.Module):
 
         self.branch = nn.Sequential(
             # (B, C, H, W) --> (B, 32, H/2, W/2) = (B, 32, 128, 128)
-            conv2x2_down(2, 32),
+            conv2x2_down(3, 32),
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
             # (B, 32, H/2, W/2) --> (B, 64, H/4, W/4) = (B, 64, 64, 64)
@@ -76,7 +76,7 @@ class g_s(nn.Module):
             PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
             # (B, 32, H/2, W/2) --> (B, 2, H, W) = (B, 2, 256, 256)
-            deconv2x2_up(32, 2),
+            deconv2x2_up(32, 3),
         )
 
     def forward(self, y_hat):

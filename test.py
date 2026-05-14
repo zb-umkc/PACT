@@ -57,12 +57,15 @@ def crop(x, size):
         value=0,
     )
     
-def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0):
+def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0, arch=None):
     # W x H x C
     img_np = np.load(filepath).astype(np.float32)
 
     # C x W x H
     img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
+    if arch == "AHT":
+            zeros = np.zeros((1, img_np.shape[1], img_np.shape[2]))
+            img_np = np.concatenate([img_np, zeros], axis=0)
     
     img = torch.tensor(img_np, dtype=torch.float32).unsqueeze(0)
     img = (img - min_val) / (max_val - min_val)
@@ -244,12 +247,14 @@ def get_scale_table(min, max, levels):
 def report_component_profiles(args=None, show_layers=False):
     M,N = 256,192
     H,W = 256,256
-    input_ch = 2
+    denom = H*W*1000.0
 
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
+        input_ch = 2
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
+        input_ch = 3
 
     model = net(M=M, N=N, G=args.groups).eval()
 
@@ -291,6 +296,7 @@ def report_component_profiles(args=None, show_layers=False):
             "macs": macs_ga + macs_ha + macs_gs + macs_hs,
             "params": int(params_ga + params_ha + params_gs + params_hs),
         },
+        "denom": denom,
     }
 
     if show_layers:
@@ -317,14 +323,16 @@ def report_component_profiles(args=None, show_layers=False):
 def report_deepspeed_profile(args=None, show_layers=False):
     M,N = 256,192
     H,W = 256,256
-    input_ch = 2
+    denom = H*W*1000.0
 
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
         model = net(M=M, N=N, G=args.groups).eval()
+        input_ch = 2
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
         model = net(M=M, N=N).eval()
+        input_ch = 3
 
     x_shape = (1, input_ch, H, W)
     y_shape = (1, M, H//16, W//16)
@@ -388,6 +396,7 @@ def report_deepspeed_profile(args=None, show_layers=False):
             "macs": macs_ga + macs_ha + macs_gs + macs_hs,
             "params": int(params_ga + params_ha + params_gs + params_hs),
         },
+        "denom": denom,
     }
 
     if show_layers:
@@ -416,15 +425,13 @@ def report_deepspeed_profile(args=None, show_layers=False):
 # -------------------------------------------------------------
 # TEST starts here
 # -------------------------------------------------------------
-def test(args):
+def test(args, profiles):
     device = torch.device("cuda")
     
-    images_list = os.listdir(os.path.abspath(args.dataset))
-    assert len(images_list) > 0, f"No files found in {args.dataset}"
-    images_list = [os.path.join(args.dataset, f) for f in images_list if f.endswith('.npy')]
-    # images_list = [os.path.join(args.dataset, f) for f in images_list]
+    images_list = os.listdir(args.data_dir)
+    assert len(images_list) > 0, f"No files found in {args.dataset}/{args.split}"
+    images_list = [os.path.join(args.data_dir, f) for f in images_list if f.endswith('.npy')]
 
-    ##### load model
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
         model = net(G=args.groups)
@@ -435,8 +442,9 @@ def test(args):
     if args.adapt:
         nga_reference = np.load("/scratch/zb7df/data/NGA/nga_reference.npy")
     
-    print("Loading", args.checkpoint)
-    checkpoint = torch.load(args.checkpoint, map_location=device)
+    ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, args.dataset, f"lambda_{args.lmbda}.pth.tar")
+    print(f"Loading checkpoint from {ckpt_path}")
+    checkpoint = torch.load(ckpt_path, map_location=device)
     model.eval()
     model.load_state_dict(checkpoint["model"], strict=True)
     model.update(get_scale_table(0.12, 64, args.num))
@@ -464,7 +472,7 @@ def test(args):
         if img_path.endswith("nitf"):
             x = load_image_nitf(img_path, min_val=args.min_val, max_val=args.max_val)
         else:
-            x = load_image(img_path, min_val=args.min_val, max_val=args.max_val)
+            x = load_image(img_path, min_val=args.min_val, max_val=args.max_val, arch=args.architecture)
 
         if args.adapt:
             I, Q = x[0], x[1]
@@ -542,14 +550,14 @@ def test(args):
         energy_3.update(energies[2])
         energy_4.update(energies[3])
 
-    arch = args.run_name.split("_")[0]
-    model = args.run_name.split("_")[1]
-    lmbda = float(args.run_name.split("_")[-1].replace("lmbda", ""))
+    arch = args.run_name.split("/")[0]
+    model = args.run_name.split("/")[1]
     test_date = date.today().strftime("%Y%m%d")
 
-    if "test" in args.dataset.split("/")[-2]:
+    # TODO: Clean this up
+    if "test/1024" in args.split:
         results_filename = "results_highres.csv"
-    elif "full" in args.dataset.split("/")[-2]:
+    elif "full" in args.split:
         results_filename = "results_full.csv"
     else:
         results_filename = "results.csv"
@@ -558,15 +566,17 @@ def test(args):
                   "msssim_amp", "mae_phase", "mse_nrcs", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
                   "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
-    write_data = {"arch": arch, "model": model, "lmbda": lmbda, "test_date": test_date, 
+    
+    write_data = {"arch": arch, "model": model, "lmbda": args.lmbda, "test_date": test_date, 
                   "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
                   "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg, "mse_nrcs": mse_nrcs.avg,
                   "enc_time": enc_time.avg, "dec_time": dec_time.avg,
-                  "total_kmac_per_px": profiles['total']['macs']/denom, "enc_kmac_per_px": profiles['enc']['macs']/denom, 
-                  "dec_kmac_per_px": profiles['dec']['macs']/denom, "ga_kmac_per_px": profiles['g_a']['macs']/denom, 
-                  "ha_kmac_per_px": profiles['h_a']['macs']/denom, "gs_kmac_per_px": profiles['g_s']['macs']/denom,
-                  "hs_kmac_per_px": profiles['h_s']['macs']/denom, "total_params": profiles['total']['params'],
+                  "total_kmac_per_px": profiles['total']['macs']/profiles["denom"], "enc_kmac_per_px": profiles['enc']['macs']/profiles["denom"], 
+                  "dec_kmac_per_px": profiles['dec']['macs']/profiles["denom"], "ga_kmac_per_px": profiles['g_a']['macs']/profiles["denom"], 
+                  "ha_kmac_per_px": profiles['h_a']['macs']/profiles["denom"], "gs_kmac_per_px": profiles['g_s']['macs']/profiles["denom"],
+                  "hs_kmac_per_px": profiles['h_s']['macs']/profiles["denom"], "total_params": profiles['total']['params'],
                   "energy_1": energy_1.avg, "energy_2": energy_2.avg, "energy_3": energy_3.avg, "energy_4": energy_4.avg}
+    
     with open(results_filename, "a") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if f.tell() == 0:
@@ -593,47 +603,44 @@ def test(args):
         f"\n--Energy (Grp 4): {energy_4.avg}"
     )
 
-if __name__ == '__main__':
 
+def parse_args(argv):
     parser = argparse.ArgumentParser(description="Example training script.")
-    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
-    parser.add_argument("--run_name", type=str, default="PACT")
-    parser.add_argument("--checkpoint", type=str, default="epoch_best.pth.tar", help="Path to a checkpoint")
+    parser.add_argument("--lambda", dest="lmbda", type=float, help="Bit-rate distortion parameter (default: %(default)s)")
+    parser.add_argument("-d", "--dataset", type=str, default="nga", help="Dataset")
+    parser.add_argument("--split", type=str, default="validation", help="Data split for inference")
+    parser.add_argument("--run-name", type=str, help="Experiment name in format [arch]/[config]")
     parser.add_argument("-num", "--num", type=int, default=60)
-    parser.add_argument("-data", "--dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/validation")
-    # parser.add_argument( "--no-dct", action="store_false", default=True, dest="dct", help="Test baseline model without DCT")
     parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
-    parser.add_argument("-g", "--groups", type=int, default=4, help="Number of groups for GConv in g_a (default: %(default)s)")
+    parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
     parser.add_argument("--adapt", action="store_true", help="Adapt the model to the input data")
-    args = parser.parse_args()
-    # print(args)
+    args = parser.parse_args(argv)
+    return args
+
+
+def main(argv):
+    args = parse_args(argv)
+    print(args)
 
     pol = "HH"
-    if args.dataset.split("/")[-3] == "NGA":
-        print("NGA Dataset Detected")
-        args.dataset = f"{args.dataset}/gt_{pol}"
+    if args.dataset == "nga":
+        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}/gt_{pol}"
         args.min_val = -5000.0
         args.max_val = 5000.0
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
-    elif args.dataset.split("/")[-2] == "Sandia":
-        print("Sandia Dataset Detected")
-        args.dataset = f"{args.dataset}/gt"
+    elif args.dataset == "sandia":
+        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}"
         args.min_val = -500.0
         args.max_val = 500.0
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
     else:
         raise ValueError("Unknown dataset structure. Please check the data_path.")
-        
-    #TODO: Remove kc-sse-ml-rn04
-    args.checkpoint = f"/scratch/zb7df/kc-sse-ml-rn04/checkpoints/PACT/{args.run_name}/{args.checkpoint}"
-    # args.checkpoint = f"/home/zb7df/dev/PACT/training_logs/{args.run_name}/{args.checkpoint}"
-    # if "DCT" in args.run_name:
-    #     args.dct = True
-
-    # Calculating kMACs
-    denom = 256*256*1000.0
 
     # profiles = report_component_profiles(args=args, show_layers=False)
     profiles = report_deepspeed_profile(args=args, show_layers=False)
 
-    test(args)
+    test(args, profiles)
+
+
+if __name__ == '__main__':
+    main(sys.argv[1:])

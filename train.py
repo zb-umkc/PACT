@@ -21,15 +21,13 @@ from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 
 class Dataset(torch.utils.data.Dataset):
-    def __init__(self, data_path, pol, transform):
-        if data_path.split("/")[-3] == "NGA":
-            print("NGA Dataset Detected")
-            self.data_dir = f"{data_path}/gt_{pol}"
+    def __init__(self, dataset, split, pol, transform, arch=None):
+        if dataset == "nga":
+            self.data_dir = f"/scratch/zb7df/data/{dataset}/{split}/gt_{pol}"
             self.min_val = -5000.0
             self.max_val = 5000.0
-        elif data_path.split("/")[-2] == "Sandia":
-            print("Sandia Dataset Detected")
-            self.data_dir = f"{data_path}/gt"
+        elif dataset == "sandia":
+            self.data_dir = f"/scratch/zb7df/data/{dataset}/{split}"
             self.min_val = -500.0
             self.max_val = 500.0
         else:
@@ -37,6 +35,7 @@ class Dataset(torch.utils.data.Dataset):
         
         self.dataset_list = [f for f in os.listdir(self.data_dir) if os.path.isfile(os.path.join(self.data_dir, f))]
         self.transform = transform
+        self.arch = arch
         
     def __len__(self):
         return len(self.dataset_list)
@@ -48,6 +47,9 @@ class Dataset(torch.utils.data.Dataset):
 
         # C x W x H
         img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
+        if self.arch == "AHT":
+            zeros = np.zeros((1, img_np.shape[1], img_np.shape[2]))
+            img_np = np.concatenate([img_np, zeros], axis=0)
         
         img = torch.tensor(img_np, dtype=torch.float32)
         img = (img - self.min_val) / (self.max_val - self.min_val)
@@ -148,13 +150,13 @@ class RateDistortionLoss(nn.Module):
         out["amp_loss"] = torch.log(local_mse + self.eps).mean()
 
         if self.iq_loss == "mse":
-            out["distortion_loss"] = (self.alpha * 255**2 * out["mse_loss"]) + ((1 - self.alpha) * out["amp_loss"])
-            out["loss"] = self.lmbda * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
+            out["iq_loss"] = out["mse_loss"]
 
         elif self.iq_loss == "l1_ssim":
             out["iq_loss"] = (out["l1_loss"] + out["ssim_loss"]) / 2
-            out["distortion_loss"] = (self.alpha * 255**2 * out["iq_loss"]) + ((1 - self.alpha) * out["amp_loss"])
-            out["loss"] = self.lmbda * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
+            
+        out["distortion_loss"] = (self.alpha * 255**2 * out["iq_loss"]) + ((1 - self.alpha) * out["amp_loss"])
+        out["loss"] = self.lmbda * out["distortion_loss"] + out["bpp_loss"] + self.gamma * ea_loss
 
         return out
     
@@ -268,8 +270,6 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
             f"EA Loss: {ea_loss.avg:.4f} | "
             f"Amp Loss: {amp_loss.avg:.4f} | "
             f"IQ Loss: {iq_loss.avg:.4f} | "
-            # f"y_bpp: {y_bpp.avg:.4f} | "
-            # f"z_bpp: {z_bpp.avg:.4f}"
         )
         torch.cuda.empty_cache()
 
@@ -285,7 +285,7 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
     return global_step
 
 
-def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
+def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
     model.eval()
     device = next(model.parameters()).device
 
@@ -302,10 +302,10 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
     z_bpp = AverageMeter()
 
     with torch.no_grad():
-        for d in test_dataloader:
+        for d in val_dataloader:
             if args.size_check:
-                print("\nTESTING")
-                print(f"-- Test input: {list(d.size())}")
+                print("\nVALIDATION")
+                print(f"-- Validation input: {list(d.size())}")
 
             d = d.to(device)
             out_net = model(d, args.size_check)
@@ -338,8 +338,6 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
             f"EA Loss: {ea_loss.avg:.4f} | "
             f"Amp Loss: {amp_loss.avg:.4f} | "
             f"IQ Loss: {iq_loss.avg:.4f} | "
-            # f"y_bpp: {y_bpp.avg:.4f} | "
-            # f"z_bpp: {z_bpp.avg:.4f}"
         )
         writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
         writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
@@ -351,39 +349,6 @@ def test_epoch(epoch, test_dataloader, model, criterion, writer, args):
         writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
 
     return loss.avg
-
-def parse_args(argv):
-    parser = argparse.ArgumentParser(description="Example training script.")
-    parser.add_argument("--model_name", type=str, default="PACT")
-    # parser.add_argument("--model_class", type=str, default="hypers")
-    parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
-    parser.add_argument("-tr_d", "--train_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train", help="Training dataset")
-    parser.add_argument("-te_d", "--test_dataset", type=str, default="/scratch/zb7df/data/NGA/multi_pol/train_val", help="Testing dataset")
-    parser.add_argument("-e", "--epochs", default=2, type=int, help="Number of epochs (default: %(default)s)")
-    parser.add_argument("-lr", "--learning-rate", default=1e-3, type=float, help="Learning rate (default: %(default)s)")
-    parser.add_argument("-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
-    parser.add_argument("--lambda", dest="lmbda", type=float, default=0.013, help="Bit-rate distortion parameter (default: %(default)s)")
-    parser.add_argument("--alpha", dest="alpha", type=float, default=1.0, help="Distortion loss weight parameter (default: %(default)s)")
-    parser.add_argument("-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
-    parser.add_argument("--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
-    parser.add_argument("--aux-learning-rate", default=1e-3, type=float, help="Auxiliary loss learning rate (default: %(default)s)")
-    parser.add_argument("--patch-size", type=int, nargs=2, default=(256, 256), help="Size of the patches to be cropped (default: %(default)s)")
-    parser.add_argument("--cuda", default=True, help="Use cuda")
-    parser.add_argument("--save", action="store_true", default=True, help="Save model to disk")
-    parser.add_argument("--save_path", type=str, default="/scratch/zb7df/checkpoints/PACT/", help="Where to Save model")
-    parser.add_argument("--log_dir", type=str, default="/scratch/zb7df/checkpoints/PACT/", help="Where to Save logs")
-    parser.add_argument("--seed", type=float, help="Set random seed for reproducibility")
-    parser.add_argument("--clip_max_norm", default=1.0, type=float, help="gradient clipping max norm (default: %(default)s")
-    parser.add_argument("--checkpoint", type=str, help="Path to a checkpoint")
-    parser.add_argument("--resume-optimizer", action="store_true", help="Load optimizer state from the checkpoint")
-    parser.add_argument("--resume-scheduler", action="store_true", help="Load scheduler state from the checkpoint")
-    parser.add_argument("--reset-lr", action="store_true", help="Reset optimizer learning rate to --learning-rate even when resuming from checkpoint")
-    parser.add_argument("--size_check", action="store_true", help="Print tensor sizes instead of training")
-    # parser.add_argument("--no-dct", action="store_false", default=True, dest="dct", help="Train baseline model without DCT")
-    parser.add_argument("--iq_loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
-    parser.add_argument("-g", "--groups", type=int, default=4, help="Number of groups for GConv in g_a (default: %(default)s)")
-    args = parser.parse_args(argv)
-    return args
 
 
 def pad_to_multiple(img, k=64):
@@ -408,17 +373,41 @@ def pad_to_multiple(img, k=64):
             (0, 0, pad_w, pad_h),  # left, top, right, bottom
             padding_mode="reflect"
         )
+    
+
+def parse_args(argv):
+    parser = argparse.ArgumentParser(description="Example training script.")
+    parser.add_argument("--run-name", type=str, help="Experiment name in format [arch]/[config]")
+    parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
+    parser.add_argument("-d", "--dataset", type=str, default="nga", help="Dataset")
+    parser.add_argument("-e", "--epochs", default=1, type=int, help="Number of epochs (default: %(default)s)")
+    parser.add_argument("-lr", "--learning-rate", default=1e-3, type=float, help="Learning rate (default: %(default)s)")
+    parser.add_argument("-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
+    parser.add_argument("--lambda", dest="lmbda", type=float, help="Bit-rate distortion parameter (default: %(default)s)")
+    parser.add_argument("--alpha", dest="alpha", type=float, help="Distortion loss weight parameter (default: %(default)s)")
+    parser.add_argument("-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
+    parser.add_argument("--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
+    parser.add_argument("--cuda", default=True, help="Use cuda")
+    parser.add_argument("--seed", type=float, default=314, help="Set random seed for reproducibility")
+    parser.add_argument("--clip-max-norm", default=1.0, type=float, help="Gradient clipping max norm (default: %(default)s")
+    parser.add_argument("--checkpoint", type=str, help="Full path to a checkpoint")
+    parser.add_argument("--resume-optimizer", action="store_true", help="Load optimizer state from the checkpoint")
+    parser.add_argument("--resume-scheduler", action="store_true", help="Load scheduler state from the checkpoint")
+    parser.add_argument("--reset-lr", action="store_true", help="Reset optimizer learning rate to --learning-rate even when resuming from checkpoint")
+    parser.add_argument("--size-check", action="store_true", help="Print tensor sizes instead of training")
+    parser.add_argument("--iq-loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
+    parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
+    args = parser.parse_args(argv)
+    return args
 
 
 def main(argv):
     args = parse_args(argv)
     print(args)
-    # today = date.today().strftime("%Y%m%d")
-    run_name = f"{args.model_name}_lmbda{str(args.lmbda)}"
-    if args.checkpoint:
-        args.checkpoint = os.path.join(args.save_path, args.checkpoint)
-    args.log_dir = os.path.join(args.log_dir, run_name)
-    args.save_path = os.path.join(args.save_path, run_name)
+
+    model_dir = os.path.join("/scratch/zb7df/models/", args.run_name, args.dataset)
+    log_dir = os.path.join("/scratch/zb7df/logs/", args.run_name, args.dataset, f"lambda_{args.lmbda}")
+
     if args.seed is not None:
         torch.manual_seed(args.seed)
         random.seed(args.seed)
@@ -429,29 +418,28 @@ def main(argv):
         print("---------------------")
         args.epochs = 1
     else:
-        if not os.path.exists(args.log_dir): os.makedirs(args.log_dir)
-        if not os.path.exists(args.save_path): os.makedirs(args.save_path)
+        if not os.path.exists(model_dir): os.makedirs(model_dir)
+        if not os.path.exists(log_dir): os.makedirs(log_dir)
         
 
     pol = "HH"
 
     train_dataset = Dataset(
-        args.train_dataset,
-        pol,
+        dataset=args.dataset,
+        split="train",
+        pol=pol,
         transform=transforms.Compose([
-            # transforms.Pad(128, padding_mode="reflect"),
-            # transforms.RandomCrop(args.patch_size),
             transforms.RandomHorizontalFlip(),
             transforms.RandomVerticalFlip(),
         ]),
+        arch=args.architecture,
     )
-    test_dataset = Dataset(
-        args.test_dataset,
-        pol,
+    val_dataset = Dataset(
+        dataset=args.dataset,
+        split="validation",
+        pol=pol,
         transform=None,
-        # transform=transforms.Compose([
-        #     lambda img: pad_to_multiple(img, 64),
-        # ])
+        arch=args.architecture,
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -465,8 +453,8 @@ def main(argv):
         drop_last=True,
     )
 
-    test_dataloader = DataLoader(
-        test_dataset,
+    val_dataloader = DataLoader(
+        val_dataset,
         batch_size=args.test_batch_size,
         num_workers=args.num_workers,
         shuffle=False,
@@ -551,7 +539,7 @@ def main(argv):
     if args.size_check:
         writer = None
     else:
-        writer = SummaryWriter(args.log_dir)
+        writer = SummaryWriter(log_dir)
 
     for epoch in range(last_epoch, (last_epoch + args.epochs)):
         start_time = time.time()
@@ -570,9 +558,9 @@ def main(argv):
             args,
         )
 
-        loss = test_epoch(
+        loss = val_epoch(
             epoch,
-            test_dataloader,
+            val_dataloader,
             net,
             criterion,
             writer,
@@ -593,14 +581,7 @@ def main(argv):
             }
 
             if is_best:
-                torch.save(checkpoint, os.path.join(args.save_path, 'epoch_best.pth.tar'))
-
-            if epoch % 50 == 0:
-                periodic_path = os.path.join(args.save_path, f'epoch_{epoch}.pth.tar')
-                if last_periodic_ckpt and os.path.exists(last_periodic_ckpt):
-                    os.remove(last_periodic_ckpt)
-                torch.save(checkpoint, periodic_path)
-                last_periodic_ckpt = periodic_path
+                torch.save(checkpoint, os.path.join(model_dir, f"lambda_{args.lmbda}.pth.tar"))
 
             epoch_time = time.time() - start_time
             print(f"-- Time: {epoch_time:.1f} seconds")

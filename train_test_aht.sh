@@ -1,16 +1,16 @@
-# Need to check loss function for AHT
-# Shouldn't it use I/Q MSE only?
+# 0.0018 0.0035 0.0067 0.013 0.025 0.0483
 
-for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
+for lmbda in 0.0018; do
     echo "Lambda=${lmbda}"
-    # python train.py \
-    #     -a AHT \
-    #     --lambda "${lmbda}" \
-    #     -e 250 \
-    #     -bs 32 \
-    #     -tr_d "/scratch/zb7df/data/Sandia/train" \
-    #     -te_d "/scratch/zb7df/data/Sandia/validation" \
-    #     --model_name AHTsandia
+    python train.py \
+        -a AHT \
+        --lambda "${lmbda}" \
+        --alpha 1.0 \
+        --iq-loss mse \
+        -e 1 \
+        -bs 32 \
+        --dataset "nga" \
+        --run-name "aht/benchmarking"
 
     # python test.py \
     #     --lambda "${lmbda}" \
@@ -27,6 +27,7 @@ for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
     python test.py \
         --lambda "${lmbda}" \
         -a AHT \
-        --run_name "AHTsandia_lmbda${lmbda}" \
-        -data "/scratch/zb7df/data/Sandia/full"
+        -d "nga" \
+        --split "full" \
+        --run-name "aht/benchmarking"
 done
