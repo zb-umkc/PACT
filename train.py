@@ -114,9 +114,14 @@ class RateDistortionLoss(nn.Module):
         return output_amp, target_amp
 
     def forward(self, output, target):
-        N, _, H, W = target.size()
+
+        N, C, H, W = target.size()
         out = {}
         num_pixels = N * H * W
+
+        if C > 2:
+            target = target[:, :2, :, :]
+            output["x_hat"] = output["x_hat"][:, :2, :, :]
 
         out["bpp_loss"] = sum(
             (torch.log(likelihoods).sum() / (-math.log(2) * num_pixels))

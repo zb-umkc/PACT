@@ -64,8 +64,8 @@ def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0,
     # C x W x H
     img_np = np.stack([img_np[:,:,0], img_np[:,:,1]], axis=0)
     if arch == "AHT":
-            zeros = np.zeros((1, img_np.shape[1], img_np.shape[2]))
-            img_np = np.concatenate([img_np, zeros], axis=0)
+        zeros = np.zeros((1, img_np.shape[1], img_np.shape[2]))
+        img_np = np.concatenate([img_np, zeros], axis=0)
     
     img = torch.tensor(img_np, dtype=torch.float32).unsqueeze(0)
     img = (img - min_val) / (max_val - min_val)
@@ -179,13 +179,18 @@ def compute_metrics(
         x: torch.Tensor,
         x_hat: torch.Tensor,
         min_val: float,
-        max_val: float
+        max_val: float,
+        arch: str,
     ) -> Dict[str, Any]:
 
     metrics: Dict[str, Any] = {}
 
+    if arch == "AHT":
+        x = x[:, :2, :, :]
+        x_hat = x_hat[:, :2, :, :]
+
     ### I/Q Error
-    # (0, 1) -> (0, 255)
+    # (0, 1)
     orig_iq = x
     rec_iq = torch.clamp(x_hat, 0, 1)
     _, metrics["psnr_iq"] = psnr(orig_iq, rec_iq)
@@ -216,6 +221,7 @@ def compute_metrics(
     metrics["mse_nrcs"], _ = psnr(orig_amp**2, rec_amp**2)
 
     return metrics
+
 
 class AverageMeter:
     """Compute running average."""
@@ -522,7 +528,10 @@ def test(args, profiles):
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
         print(f"x min: {x.min()}, x max: {x.max()}")
         print(f"x_hat min: {x_hat.min()}, x_hat max: {x_hat.max()}")
-        metrics = compute_metrics(x, x_hat, args.min_val, args.max_val)
+        print(f"-- 1: {x_hat[:, 0, :, :].min()}, {x_hat[:, 0, :, :].max()}")
+        print(f"-- 2: {x_hat[:, 1, :, :].min()}, {x_hat[:, 1, :, :].max()}")
+        print(f"-- 3: {x_hat[:, 2, :, :].min()}, {x_hat[:, 2, :, :].max()}")
+        metrics = compute_metrics(x, x_hat, args.min_val, args.max_val, arch=args.architecture)
 
         # msssim = ms_ssim(x_hat, x, data_range=1.0)
         # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
