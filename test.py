@@ -528,16 +528,17 @@ def test(args, profiles):
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
         print(f"x min: {x.min()}, x max: {x.max()}")
         print(f"x_hat min: {x_hat.min()}, x_hat max: {x_hat.max()}")
-        print(f"-- 1: {x_hat[:, 0, :, :].min()}, {x_hat[:, 0, :, :].max()}")
-        print(f"-- 2: {x_hat[:, 1, :, :].min()}, {x_hat[:, 1, :, :].max()}")
-        print(f"-- 3: {x_hat[:, 2, :, :].min()}, {x_hat[:, 2, :, :].max()}")
+        # print(f"-- 1: {x_hat[:, 0, :, :].min()}, {x_hat[:, 0, :, :].max()}")
+        # print(f"-- 2: {x_hat[:, 1, :, :].min()}, {x_hat[:, 1, :, :].max()}")
+        # print(f"-- 3: {x_hat[:, 2, :, :].min()}, {x_hat[:, 2, :, :].max()}")
         metrics = compute_metrics(x, x_hat, args.min_val, args.max_val, arch=args.architecture)
 
         # msssim = ms_ssim(x_hat, x, data_range=1.0)
         # msssim_db = 10 * (torch.log(1 * 1 / (1 - msssim)) / np.log(10)).item()
 
         # Calculate Bits per Pixel per Band
-        num_pixels = c*h*w
+        #TODO: Hard-coding 2 bands for now (SAR I/Q)
+        num_pixels = 2*h*w
         bpp_img = sum(len(s) for s in out_enc["strings"]) * 8.0 / num_pixels
         ybpp_img = len(out_enc["strings"][0]) * 8.0 / num_pixels
         zbpp_img = len(out_enc["strings"][1]) * 8.0 / num_pixels

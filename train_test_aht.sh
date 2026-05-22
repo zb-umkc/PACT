@@ -9,7 +9,7 @@ for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
         --iq-loss mse \
         -e 250 \
         -bs 32 \
-        --dataset "nga" \
+        --dataset "sandia" \
         --run-name "aht/benchmarking"
 
     # python test.py \
@@ -27,7 +27,7 @@ for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
     python test.py \
         --lambda "${lmbda}" \
         -a AHT \
-        -d "nga" \
+        -d "sandia" \
         --split "full" \
         --run-name "aht/benchmarking"
 done
