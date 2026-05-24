@@ -23,6 +23,8 @@
 7. Run benchmarking
     - `source benchmark_setup.sh`
     - `bash benchmark.sh test` (Use 'full', 'test', 'validation', or 'test2')
+8. Upload models to HF
+    - `hf upload zb-umkc/aht /scratch/zb7df/models/aht/benchmarking ./benchmarking`
   
 ### Important Notes:
 - `train_test.sh` script contains 2-stage training process for I/Q and Amp loss
