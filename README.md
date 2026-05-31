@@ -19,7 +19,7 @@
 6. Launch Tensorboard
     - Open new terminal
     - `conda activate pact`
-    - `tensorboard --logdir /scratch/zb7df/checkpoints/PACT`
+    - `tensorboard --logdir /scratch/zb7df/logs/sar-pact`
 7. Run benchmarking
     - `source benchmark_setup.sh`
     - `bash benchmark.sh test` (Use 'full', 'test', 'validation', or 'test2')

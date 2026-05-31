@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import itertools
 import numpy as np
+import torch_dct as dct
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
@@ -22,37 +23,40 @@ class PadLayer(nn.Module):
 
 
 class GConv(nn.Module):
-    def __init__(self, N=80, G=4):
+    def __init__(self, dataset: str, N=80, G=4):
         super().__init__()
         self.N = N
         self.G = G
 
-        # NGA
-        indices = [
-            5, 21, 20, 17, 1, 4, 16, 0,
-            25, 9, 22, 6, 24, 8, 2, 18,
-            26, 10, 29, 28, 13, 12, 23, 3,
-            19, 7, 30, 27, 14, 11, 31, 15
-        ]
-        energy_props = np.array([
-            0.05243656, 0.05239884, 0.05199771, 0.05199648, 0.05196691, 0.05195392, 0.05158095, 0.05138119,
-            0.04503353, 0.04499872, 0.04497314, 0.04494835, 0.04471355, 0.04467467, 0.04463650, 0.04462454,
-            0.03771098, 0.03760796, 0.01270533, 0.01268872, 0.01268246, 0.01266787, 0.01266614, 0.01264959,
-            0.01264733, 0.01264714, 0.01057431, 0.01054387, 0.01051681, 0.01048368, 0.00345573, 0.00343664
-        ])
+        if dataset == "nga":
+            indices = [
+                5, 21, 20, 17, 1, 4, 16, 0,
+                25, 9, 22, 6, 24, 8, 2, 18,
+                26, 10, 29, 28, 13, 12, 23, 3,
+                19, 7, 30, 27, 14, 11, 31, 15
+            ]
+            energy_props = np.array([
+                0.05243656, 0.05239884, 0.05199771, 0.05199648, 0.05196691, 0.05195392, 0.05158095, 0.05138119,
+                0.04503353, 0.04499872, 0.04497314, 0.04494835, 0.04471355, 0.04467467, 0.04463650, 0.04462454,
+                0.03771098, 0.03760796, 0.01270533, 0.01268872, 0.01268246, 0.01266787, 0.01266614, 0.01264959,
+                0.01264733, 0.01264714, 0.01057431, 0.01054387, 0.01051681, 0.01048368, 0.00345573, 0.00343664
+            ])
 
-        # # Sandia
-        # indices = [
-        #     15, 31, 11, 27, 14, 30, 10, 26,  
-        #     7, 23, 13, 29,  6,  9, 22, 25,  
-        #     3, 19, 12,  5, 28, 21,  2,  8, 
-        #     18, 24,  4,  1,  0, 20, 17, 16]
-        # energy_props = np.array([
-        #     0.111992955, 0.10822382, 0.07668176, 0.07386412, 0.068610266, 0.065879494, 0.046987437, 0.044794858, 
-        #     0.04019878, 0.038350187, 0.0358051, 0.033997547, 0.025002223, 0.024836678, 0.023395132, 0.023240933, 
-        #     0.016422447, 0.0151698515, 0.014588387, 0.013730173, 0.0134129515, 0.012311397, 0.010686431, 0.010633184, 
-        #     0.009420066, 0.00935294, 0.006717675, 0.0066061723, 0.0054495297, 0.0052662194, 0.0052283565, 0.00314297
-        # ])
+        elif dataset == "sandia":
+            indices = [
+                15, 31, 11, 27, 14, 30, 10, 26,  
+                7, 23, 13, 29,  6,  9, 22, 25,  
+                3, 19, 12,  5, 28, 21,  2,  8, 
+                18, 24,  4,  1,  0, 20, 17, 16]
+            energy_props = np.array([
+                0.111992955, 0.10822382, 0.07668176, 0.07386412, 0.068610266, 0.065879494, 0.046987437, 0.044794858, 
+                0.04019878, 0.038350187, 0.0358051, 0.033997547, 0.025002223, 0.024836678, 0.023395132, 0.023240933, 
+                0.016422447, 0.0151698515, 0.014588387, 0.013730173, 0.0134129515, 0.012311397, 0.010686431, 0.010633184, 
+                0.009420066, 0.00935294, 0.006717675, 0.0066061723, 0.0054495297, 0.0052662194, 0.0052283565, 0.00314297
+            ])
+
+        else:
+            raise ValueError(f"Unknown dataset: {dataset}")
 
         if self.G == 6:
             self.N_p = [33, 29, 6, 8, 3, 1]
@@ -118,18 +122,19 @@ class GConv(nn.Module):
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, M: int = 320, G: int = 4):
+    def __init__(self, dataset: str, M: int = 320, G: int = 4, latent_dct=False):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
+        self.latent_dct = latent_dct
 
         self.branch = nn.Sequential(
             # (B, C, H, W) --> (B, C*b*b, H/b, W/b) = (B, 32, 64, 64)
             dctLayer(block_size=4),
 
             # (B, C*b*b, H/b, W/b) --> (B, 80, H/b, W/b) = (B, 80, 64, 64)
-            GConv(N=80, G=G),
+            GConv(dataset, N=80, G=G),
 
             # (B, 80, H/b, W/b) --> (B, 160, H/2b, W/2b) = (B, 160, 32, 32)
             conv2x2_down(80, 160),
@@ -142,18 +147,27 @@ class g_a(nn.Module):
         )
 
     def forward(self, x):
-        return self.branch(x)
+        y = self.branch(x)                  # (1, 320, H/16, W/16)
+
+        # ---------------- DCT Transform ----------------
+        if self.latent_dct:
+            y = y.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
+            y = dct.dct(y, norm='ortho')    # (1, H/16, W/16, 320)
+            y = y.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+
+        return y
 
 
 # -------------------------------------------------------------
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 320):
+    def __init__(self, M: int = 320, latent_dct=False):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
+        self.latent_dct = latent_dct
 
         self.branch = nn.Sequential(
             # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
@@ -173,7 +187,15 @@ class g_s(nn.Module):
         )
 
     def forward(self, y_hat):
-        return self.branch(y_hat)
+        # ---------------- DCT Transform ----------------
+        if self.latent_dct:
+            y_hat = y_hat.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
+            y_hat = dct.idct(y_hat, norm='ortho')   # (1, H/16, W/16, 320)
+            y_hat = y_hat.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+
+        x_hat = self.branch(y_hat)                  # (1, 320, H/16, W/16)
+
+        return x_hat
 
 
 # -------------------------------------------------------------
@@ -308,7 +330,13 @@ def compute_group_energy(model, x):
     with torch.no_grad():
         y = model.g_a(x)          # (1, M, H/16, W/16)
 
-        groups = model.split_groups(y)
+        # Apply DCT here for testing
+        y = y.permute(0, 2, 3, 1)           # (1, H/16, W/16, 320)
+        y_dct = dct.dct(y, norm='ortho')    # (1, H/16, W/16, 320)
+        y_dct = y_dct.permute(0, 3, 1, 2)   # (1, 320, H/16, W/16)
+
+        # groups = model.split_groups(y)
+        groups = model.split_groups(y_dct)
 
         energies = []
         for g in groups:
@@ -322,18 +350,24 @@ def compute_group_energy(model, x):
 # FINAL PACT MODEL
 # -------------------------------------------------------------
 class PACTModel(basemodel):
-    def __init__(self, M: int = 320, N: int = 192, G: int = 4):
+    def __init__(self, dataset: str, M: int = 320, N: int = 192, G: int = 4, latent_dct=False):
         super().__init__(N)
         
+        self.dataset = dataset
         self.M = M
         self.N = N
         self.G = G
 
-        self.g_a = g_a(M, G)
-        self.g_s = g_s(M)
+        self.g_a = g_a(
+            dataset=dataset,
+            M=M,
+            G=G,
+            latent_dct=latent_dct
+        )
+        self.g_s = g_s(M=M, latent_dct=latent_dct)
 
-        self.h_a = h_a(M, N)
-        self.h_s = h_s(M, N)
+        self.h_a = h_a(M=M, N=N)
+        self.h_s = h_s(M=M, N=N)
 
     def split_groups(self, tensor):
         B, C, H, W = tensor.shape

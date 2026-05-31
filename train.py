@@ -82,14 +82,14 @@ class LocalLogMSELoss(nn.Module):
 class RateDistortionLoss(nn.Module):
     """Custom rate distortion loss with a Lagrangian parameter."""
 
-    def __init__(self, lmbda=1e-2, iq_loss="mse", alpha=1.0, kernel_size=5, eps=1e-8, min_val=-5000.0, max_val=5000.0):
+    def __init__(self, lmbda=1e-2, iq_loss="mse", alpha=1.0, gamma=1.0, kernel_size=5, eps=1e-8, min_val=-5000.0, max_val=5000.0):
         super().__init__()
         self.iq_loss = iq_loss
         self.mse = nn.MSELoss()
         self.l1 = nn.L1Loss()
         self.lmbda = lmbda
         self.ea_weights = torch.tensor([0.0, 0.1, 0.3, 0.5])
-        self.gamma = 1.0   # EA strength factor (paper uses gamma≈1)
+        self.gamma = gamma   # EA strength factor (paper uses gamma≈1)
         self.alpha = alpha
         self.kernel_size = kernel_size
         self.eps = eps
@@ -390,11 +390,12 @@ def parse_args(argv):
     parser.add_argument("-n", "--num-workers", type=int, default=8, help="Dataloaders threads (default: %(default)s)")
     parser.add_argument("--lambda", dest="lmbda", type=float, help="Bit-rate distortion parameter (default: %(default)s)")
     parser.add_argument("--alpha", dest="alpha", type=float, help="Distortion loss weight parameter (default: %(default)s)")
+    parser.add_argument("--gamma", dest="gamma", type=float, help="EA strength factor (default: %(default)s)")
     parser.add_argument("-bs", "--batch-size", type=int, default=8, help="Batch size (default: %(default)s)")
     parser.add_argument("--test-batch-size", type=int, default=1, help="Test batch size (default: %(default)s)")
     parser.add_argument("--cuda", default=True, help="Use cuda")
     parser.add_argument("--seed", type=float, default=314, help="Set random seed for reproducibility")
-    parser.add_argument("--clip-max-norm", default=1.0, type=float, help="Gradient clipping max norm (default: %(default)s")
+    parser.add_argument("--clip-max-norm", default=1.0, type=float, help="Gradient clipping max norm (default: %(default)s)")
     parser.add_argument("--checkpoint", type=str, help="Full path to a checkpoint")
     parser.add_argument("--resume-optimizer", action="store_true", help="Load optimizer state from the checkpoint")
     parser.add_argument("--resume-scheduler", action="store_true", help="Load scheduler state from the checkpoint")
@@ -402,6 +403,7 @@ def parse_args(argv):
     parser.add_argument("--size-check", action="store_true", help="Print tensor sizes instead of training")
     parser.add_argument("--iq-loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
     parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
+    parser.add_argument("--latent-dct", action="store_true", help="Apply DCT across latent channels")
     args = parser.parse_args(argv)
     return args
 
@@ -467,7 +469,11 @@ def main(argv):
     )
 
     if args.architecture == "PACT":
-        net = importlib.import_module(".PACT", f'src.models').PACTModel(G=args.groups)
+        net = importlib.import_module(".PACT", f'src.models').PACTModel(
+            dataset=args.dataset,
+            G=args.groups,
+            latent_dct=args.latent_dct
+        )
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel()
 
@@ -496,6 +502,7 @@ def main(argv):
         lmbda=args.lmbda,
         iq_loss=args.iq_loss,
         alpha=args.alpha,
+        gamma=args.gamma,
         min_val=train_dataset.min_val,
         max_val=train_dataset.max_val
     )

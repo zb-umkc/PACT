@@ -69,6 +69,7 @@ def load_image(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0,
     
     img = torch.tensor(img_np, dtype=torch.float32).unsqueeze(0)
     img = (img - min_val) / (max_val - min_val)
+
     return img
 
 def load_image_nitf(filepath: str, min_val: float = -5000.0, max_val: float = 5000.0):
@@ -120,9 +121,9 @@ def load_image_nitf(filepath: str, min_val: float = -5000.0, max_val: float = 50
     return gt_sar.unsqueeze(0)
 
 
-def transform_sandia_to_nga(I, Q, nga_reference, use_gamma=False):
+def sandia2nga_transform(I, Q, nga_reference, use_gamma=False, plot_hist=False):
     """Forward transform: Sandia I/Q -> NGA-domain I/Q"""
-    orig_amp = np.sqrt(I**2 + Q**2)
+    # orig_amp = np.sqrt(I**2 + Q**2).numpy()
 
     if use_gamma:
         # adjust_gamma expects [0, 1] input
@@ -130,20 +131,54 @@ def transform_sandia_to_nga(I, Q, nga_reference, use_gamma=False):
         matched_amp_norm = adjust_gamma(amp_norm, gamma=0.5)  # tune this
         matched_amp = matched_amp_norm * nga_reference.max()
     else:
-        matched_amp = match_histograms(orig_amp, nga_reference)
+        # matched_flat = match_histograms(orig_amp.flatten(), nga_reference)
+        # matched_amp = matched_flat.reshape(orig_amp.shape)
+        I_matched_flat = match_histograms(I.flatten(), nga_reference[0])
+        matched_I = I_matched_flat.reshape(I.shape)
+        Q_matched_flat = match_histograms(Q.flatten(), nga_reference[1])
+        matched_Q = Q_matched_flat.reshape(Q.shape)
+
+    if plot_hist:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        axes[0].hist(orig_amp.flatten(), bins=100, alpha=0.5)
+        axes[0].set_title("Original Amplitude")
+        axes[1].hist(nga_reference.flatten(), bins=100, alpha=0.5)
+        axes[1].set_title("NGA Reference Amplitude")
+        axes[2].hist(matched_amp.flatten(), bins=100, alpha=0.5)
+        axes[2].set_title("Matched Amplitude")
+        plt.tight_layout()
+        plt.savefig("plots/amp_hist_matching.png")
 
     # Preserve phase, apply new amplitude
-    scale = np.where(orig_amp > 1e-8, matched_amp / orig_amp, 0.0)
-    
-    return I * scale, Q * scale, orig_amp, matched_amp
+    # safe_amp = np.where(orig_amp > 1e-8, orig_amp, 1.0)
+    # scale = np.where(orig_amp > 1e-8, matched_amp / safe_amp, 0.0)
+    safe_I = np.where(I > 1e-8, I, 1.0)
+    scale_I = np.where(I > 1e-8, matched_I / safe_I, 0.0)
+    safe_Q = np.where(Q > 1e-8, Q, 1.0)
+    scale_Q = np.where(Q > 1e-8, matched_Q / safe_Q, 0.0)
+
+    return I * scale_I, Q * scale_Q, I, Q, matched_I, matched_Q
 
 
-def inverse_transform(recon_I, recon_Q, orig_amp, matched_amp):
+def sandia2nga_inverse(recon_I, recon_Q, orig_amp):
     """Inverse transform: NGA-domain reconstruction -> Sandia domain"""
     recon_amp = np.sqrt(recon_I**2 + recon_Q**2)
+
     # Invert the amplitude mapping using original and matched as reference
     inverted_amp = match_histograms(recon_amp, orig_amp)
-    scale = np.where(recon_amp > 1e-8, inverted_amp / recon_amp, 0.0)
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    axes[0].hist(recon_amp.flatten(), bins=100, alpha=0.5)
+    axes[0].set_title("Reconstructed Amplitude")
+    axes[1].hist(orig_amp.flatten(), bins=100, alpha=0.5)
+    axes[1].set_title("Original Amplitude (Ref)")
+    axes[2].hist(inverted_amp.flatten(), bins=100, alpha=0.5)
+    axes[2].set_title("Inverted Amplitude (Final)")
+    plt.tight_layout()
+    plt.savefig("plots/amp_hist_matching_inv.png")
+
+    safe_amp = np.where(recon_amp > 1e-8, recon_amp, 1.0)
+    scale = np.where(recon_amp > 1e-8, inverted_amp / safe_amp, 0.0)
     
     return recon_I * scale, recon_Q * scale
 
@@ -182,6 +217,8 @@ def compute_metrics(
         max_val: float,
         arch: str,
     ) -> Dict[str, Any]:
+
+    print(x.device, x_hat.device)
 
     metrics: Dict[str, Any] = {}
 
@@ -262,7 +299,13 @@ def report_component_profiles(args=None, show_layers=False):
         net = importlib.import_module(".AHT", f'src.models').AHTModel
         input_ch = 3
 
-    model = net(M=M, N=N, G=args.groups).eval()
+    model = net(
+        dataset=args.dataset,
+        M=M,
+        N=N,
+        G=args.groups,
+        latent_dct=args.latent_dct
+    ).eval()
 
     x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
@@ -333,7 +376,12 @@ def report_deepspeed_profile(args=None, show_layers=False):
 
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel
-        model = net(M=M, N=N, G=args.groups).eval()
+        model = net(
+            dataset=args.dataset,
+            M=M, N=N,
+            G=args.groups,
+            latent_dct=args.latent_dct
+        ).eval()
         input_ch = 2
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel
@@ -438,17 +486,36 @@ def test(args, profiles):
     assert len(images_list) > 0, f"No files found in {args.dataset}/{args.split}"
     images_list = [os.path.join(args.data_dir, f) for f in images_list if f.endswith('.npy')]
 
-    if args.architecture == "PACT":
-        net = importlib.import_module(".PACT", f'src.models').PACTModel
-        model = net(G=args.groups)
-    else:
-        net = importlib.import_module(".AHT", f'src.models').AHTModel
-        model = net()
-
     if args.adapt:
-        nga_reference = np.load("/scratch/zb7df/data/NGA/nga_reference.npy")
+        nga_reference = np.load("/scratch/zb7df/data/nga/nga_reference.npy")
+        if args.architecture == "PACT":
+            net = importlib.import_module(".PACT", f'src.models').PACTModel
+            model = net(
+                dataset="nga",
+                G=args.groups,
+                latent_dct=args.latent_dct
+            )
+        else:
+            net = importlib.import_module(".AHT", f'src.models').AHTModel
+            model = net()
+
+        ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, "nga", f"lambda_{args.lmbda}.pth.tar")
+
+    else:
+        if args.architecture == "PACT":
+            net = importlib.import_module(".PACT", f'src.models').PACTModel
+            model = net(
+                dataset=args.dataset,
+                G=args.groups,
+                latent_dct=args.latent_dct
+            )
+        else:
+            net = importlib.import_module(".AHT", f'src.models').AHTModel
+            model = net()
+
+        ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, args.dataset, f"lambda_{args.lmbda}.pth.tar")
     
-    ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, args.dataset, f"lambda_{args.lmbda}.pth.tar")
+    print(f"Instantiated model for dataset {model.dataset}")
     print(f"Loading checkpoint from {ckpt_path}")
     checkpoint = torch.load(ckpt_path, map_location=device)
     model.eval()
@@ -479,14 +546,12 @@ def test(args, profiles):
             x = load_image_nitf(img_path, min_val=args.min_val, max_val=args.max_val)
         else:
             x = load_image(img_path, min_val=args.min_val, max_val=args.max_val, arch=args.architecture)
+            print(x.shape)
 
         if args.adapt:
-            I, Q = x[0], x[1]
-            I_t, Q_t, orig_amp, matched_amp = transform_sandia_to_nga(I, Q, nga_reference)
-
-            # Inference
+            I, Q = x[:, 0, :, :].squeeze(), x[:, 1, :, :].squeeze()
+            I_t, Q_t, orig_amp, matched_amp = sandia2nga_transform(I, Q, nga_reference)
             x = torch.tensor(np.stack([I_t, Q_t]), dtype=torch.float32).unsqueeze(0)
-            print(x.shape)
 
         c, h, w = x.shape[1], x.shape[2], x.shape[3]
         x = x.to(device)
@@ -513,13 +578,13 @@ def test(args, profiles):
         x_hat = out_dec["x_hat"]  # REMOVED CROP
 
         if args.adapt:
-            I_hat, Q_hat = inverse_transform(
-                x_hat[0], x_hat[1], orig_amp, matched_amp
+            x_hat = x_hat.cpu().numpy()
+            I_hat, Q_hat = sandia2nga_inverse(
+                x_hat[:, 0, :, :].squeeze(), x_hat[:, 1, :, :].squeeze(), orig_amp
             )
-            x_hat = torch.stack([I_hat, Q_hat], dim=0).unsqueeze(0)
+            x_hat = torch.tensor(np.stack([I_hat, Q_hat]), dtype=torch.float32).unsqueeze(0)
+            x_hat = x_hat.to(device)
 
-            print(x_hat.shape)
-        
         # # Save reconstructed I/Q for visualization
         # save_rec = x_hat.clamp(0,1).float().cpu().squeeze(0).permute(1,2,0).numpy()
         # np.save(f"recon/{img_name}", save_rec)
@@ -572,12 +637,12 @@ def test(args, profiles):
     else:
         results_filename = "results.csv"
 
-    fieldnames = ["arch", "model", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
+    fieldnames = ["arch", "model", "dataset", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
                   "msssim_amp", "mae_phase", "mse_nrcs", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
                   "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
     
-    write_data = {"arch": arch, "model": model, "lmbda": args.lmbda, "test_date": test_date, 
+    write_data = {"arch": arch, "model": model, "dataset": args.dataset, "lmbda": args.lmbda, "test_date": test_date, 
                   "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
                   "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg, "mse_nrcs": mse_nrcs.avg,
                   "enc_time": enc_time.avg, "dec_time": dec_time.avg,
@@ -624,6 +689,7 @@ def parse_args(argv):
     parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
     parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
     parser.add_argument("--adapt", action="store_true", help="Adapt the model to the input data")
+    parser.add_argument("--latent-dct", action="store_true", help="Apply DCT across latent channels")
     args = parser.parse_args(argv)
     return args
 
