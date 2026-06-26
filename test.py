@@ -96,7 +96,7 @@ def load_image_nitf(filepath: str, min_val: float = -5000.0, max_val: float = 50
     sar_image        = torch.tensor(sar_image).permute(2, 0, 1)
 
     c, h, w = sar_image.shape
-    ps = 64
+    ps = 128
 
     # Calculate padding required along each dimension
     pad_y = (ps - (h % ps)) % ps
@@ -282,6 +282,25 @@ class AverageMeter:
 def get_scale_table(min, max, levels):
     """Returns table of logarithmically scales."""
     return torch.exp(torch.linspace(math.log(min), math.log(max), levels))
+
+
+def load_checkpoint_compatible(model, checkpoint_path, device):
+    """Load checkpoint, handling DDP prefix mismatch."""
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    
+    # Extract the model state dict
+    state_dict = checkpoint if isinstance(checkpoint, dict) and "model" not in checkpoint else checkpoint.get("model", checkpoint)
+    
+    # Remove 'module.' prefix if present (DDP wrapping)
+    new_state_dict = {}
+    for k, v in state_dict.items():
+        if k.startswith("module."):
+            new_state_dict[k[7:]] = v  # strip 'module.'
+        else:
+            new_state_dict[k] = v
+    
+    model.load_state_dict(new_state_dict)
+    return model
 
 
 # -------------------------------------------------------------
@@ -517,9 +536,8 @@ def test(args, profiles):
     
     print(f"Instantiated model for dataset {model.dataset}")
     print(f"Loading checkpoint from {ckpt_path}")
-    checkpoint = torch.load(ckpt_path, map_location=device)
     model.eval()
-    model.load_state_dict(checkpoint["model"], strict=True)
+    model = load_checkpoint_compatible(model, ckpt_path, device)
     model.update(get_scale_table(0.12, 64, args.num))
     model = model.to(device)
 

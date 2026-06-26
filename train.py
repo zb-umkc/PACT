@@ -19,6 +19,13 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
+import torch.distributed as dist
+
+# 1. Tells PyTorch to auto-tune and find the fastest GPU math paths
+torch.backends.cudnn.benchmark = True
+
+# 2. Ensures PyTorch uses the highest speed math configurations
+torch.set_float32_matmul_precision('high')
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, dataset, split, pol, transform, arch=None):
@@ -178,7 +185,10 @@ class AverageMeter:
     def update(self, val, n=1):
         # [FIX] Get Python float to prevent graph leak
         if isinstance(val, torch.Tensor):
-            val = val.detach().item()
+            val = val.detach()
+            if val.numel() > 1:
+                val = val.mean()
+            val = val.item()
         self.val = val
         self.sum += val * n
         self.count += n
@@ -449,24 +459,51 @@ def main(argv):
         arch=args.architecture,
     )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    # MULTI-GPU SUPPORT #
+    use_ddp = torch.cuda.device_count() > 1 and "LOCAL_RANK" in os.environ
+    if use_ddp:
+        local_rank = int(os.environ["LOCAL_RANK"])
+        torch.cuda.set_device(local_rank)
+        dist.init_process_group(backend="nccl", init_method="env://")
+        device = torch.device(f"cuda:{local_rank}")
 
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        shuffle=True,
-        pin_memory=(device == "cuda"),
-        drop_last=True,
-    )
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset, shuffle=True)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset, shuffle=False)
 
-    val_dataloader = DataLoader(
-        val_dataset,
-        batch_size=args.test_batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-        pin_memory=(device == "cuda"),
-    )
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            sampler=train_sampler,
+            num_workers=args.num_workers,
+            shuffle=False,
+            pin_memory=True,
+            drop_last=True,
+        )
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=args.test_batch_size,
+            sampler=val_sampler,
+            num_workers=args.num_workers,
+            shuffle=False,
+            pin_memory=True,
+        )
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        train_dataloader = DataLoader(
+            train_dataset,
+            batch_size=args.batch_size,
+            num_workers=args.num_workers,
+            shuffle=True,
+            pin_memory=(device == "cuda"),
+            drop_last=True,
+        )
+        val_dataloader = DataLoader(
+            val_dataset,
+            batch_size=args.test_batch_size,
+            num_workers=args.num_workers,
+            shuffle=False,
+            pin_memory=(device == "cuda"),
+        )
 
     if args.architecture == "PACT":
         net = importlib.import_module(".PACT", f'src.models').PACTModel(
@@ -479,6 +516,12 @@ def main(argv):
 
     if args.size_check: print(net)
     net = net.to(device)
+    if use_ddp:
+        net = torch.nn.parallel.DistributedDataParallel(
+            net,
+            device_ids=[local_rank],
+            output_device=local_rank,
+        )
 
     total_params = sum(p.numel() for p in net.parameters())
     trainable_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
@@ -558,6 +601,9 @@ def main(argv):
         if not args.size_check:
             print(f"\nStarting epoch {epoch}")
             print(f"-- LR: {optimizer.param_groups[0]['lr']}")
+
+        if use_ddp:
+            train_dataloader.sampler.set_epoch(epoch)
         
         global_step = train_one_epoch(
             net,
@@ -602,6 +648,9 @@ def main(argv):
             early_stopping.check_early_stop(loss)
             if early_stopping.stop_training:
                 break
+
+    if use_ddp:
+        dist.destroy_process_group()
 
 
 if __name__ == "__main__":
