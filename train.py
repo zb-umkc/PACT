@@ -21,6 +21,8 @@ from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 
+from src.models.PACT import compute_group_energy
+
 # 1. Tells PyTorch to auto-tune and find the fastest GPU math paths
 torch.backends.cudnn.benchmark = True
 
@@ -315,6 +317,10 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
     iq_loss = AverageMeter()
     y_bpp = AverageMeter()
     z_bpp = AverageMeter()
+    energy_1 = AverageMeter()
+    energy_2 = AverageMeter()
+    energy_3 = AverageMeter()
+    energy_4 = AverageMeter()
 
     with torch.no_grad():
         for d in val_dataloader:
@@ -338,6 +344,12 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
             y_bpp.update(out_criterion["y_bpp"])
             z_bpp.update(out_criterion["z_bpp"])
 
+            energies = compute_group_energy(model, d)
+            energy_1.update(energies[0])
+            energy_2.update(energies[1])
+            energy_3.update(energies[2])
+            energy_4.update(energies[3])
+
             if args.size_check:
                 break
 
@@ -354,6 +366,7 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
             f"Amp Loss: {amp_loss.avg:.4f} | "
             f"IQ Loss: {iq_loss.avg:.4f} | "
         )
+        print(f"-- Group Energy: {energy_1.avg:.2f} | {energy_2.avg:.2f} | {energy_3.avg:.2f} | {energy_4.avg:.2f}")
         writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
         writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
         writer.add_scalar("Test/L1 Loss", l1_loss.avg, global_step = epoch)

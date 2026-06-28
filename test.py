@@ -581,7 +581,7 @@ def test(args, profiles):
         enc_start = time.time()
         with torch.no_grad():
             energies = compute_group_energy(model, x) # REMOVED PAD
-            # print("group energies:", energies)
+            # print("---- Group Energy:", energies)
             out_enc = model.compress(x) # REMOVED PAD
         torch.cuda.synchronize()
         enc_t = time.time() - enc_start

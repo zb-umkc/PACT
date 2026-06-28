@@ -31,40 +31,40 @@ for pair in "${lambdas[@]}"; do
     torchrun --nproc_per_node=1 train.py \
         --lambda "${lmbda1}" \
         --alpha 1.0 \
-        --gamma 1.0 \
+        --gamma 0.0 \
         -g "8" \
         -e 250 \
         -bs 64 \
         --dataset "nga" \
-        --run-name "sar-pact/g8_alpha1.0"
+        --run-name "sar-pact/g8_alpha1.0_gamma0.0_latentdct"
 
     python test.py \
         -a "PACT" \
         --lambda "${lmbda1}" \
-        -d "sandia" \
+        -d "nga" \
         --split "full" \
         -g "8" \
-        --run-name "sar-pact/g8_alpha1.0"
+        --run-name "sar-pact/g8_alpha1.0_gamma0.0_latentdct"
 
     # Phase 2: Fine-tune for Amplitude only (alpha=0.0)
     echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
     torchrun --nproc_per_node=1 train.py \
         --lambda "${lmbda2}" \
         --alpha 0.01 \
-        --gamma 1.0 \
+        --gamma 0.0 \
         -g "8" \
-        -e 100 \
+        -e 1000 \
         -bs 64 \
         --dataset "nga" \
-        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0/nga/lambda_${lmbda1}.pth.tar" \
-        --run-name "sar-pact/g8_alpha0.01"
+        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_gamma0.0_latentdct/nga/lambda_${lmbda1}.pth.tar" \
+        --run-name "sar-pact/g8_alpha0.01_gamma0.0_latentdct"
         
     python test.py \
         -a "PACT" \
         --lambda "${lmbda2}" \
-        -d "sandia" \
+        -d "nga" \
         --split "full" \
         -g "8" \
-        --run-name "sar-pact/g8_alpha0.01"
+        --run-name "sar-pact/g8_alpha0.01_gamma0.0_latentdct"
 
 done
