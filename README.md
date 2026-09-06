@@ -16,7 +16,7 @@
     - `source ssh.sh`
     - Note: `bash ssh.sh` command will run in sub-shell and not give permissions in outer shell
 8. Test model configuration before training
-    - `python train.py --size_check [other_args]`
+    - `python train.py --size-check [other_args]`
 9. Train/test model(s)
     - Modify train_test.sh as needed
     - `bash train_test.sh`

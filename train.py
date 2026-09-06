@@ -20,6 +20,7 @@ from torch.utils.data import DataLoader
 from torchvision import transforms
 from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel
 
 from src.models.PACT import compute_group_energy
 
@@ -290,14 +291,15 @@ def train_one_epoch(model, criterion, train_dataloader, optimizer, epoch, global
         )
         torch.cuda.empty_cache()
 
-        writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
-        writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/L1 Loss", l1_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/SSIM Loss", ssim_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/Amp Loss", amp_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
+        if writer is not None:
+            writer.add_scalar("Train/Loss", loss.avg, global_step = epoch)
+            writer.add_scalar("Train/MSE Loss", mse_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/L1 Loss", l1_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/SSIM Loss", ssim_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/BPP Loss", bpp_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/EA Loss", ea_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/Amp Loss", amp_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
 
     return global_step
 
@@ -367,14 +369,22 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
             f"IQ Loss: {iq_loss.avg:.4f} | "
         )
         print(f"-- Group Energy: {energy_1.avg:.2f} | {energy_2.avg:.2f} | {energy_3.avg:.2f} | {energy_4.avg:.2f}")
-        writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
-        writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
-        writer.add_scalar("Test/L1 Loss", l1_loss.avg, global_step = epoch)
-        writer.add_scalar("Test/SSIM Loss", ssim_loss.avg, global_step = epoch)
-        writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
-        writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/Amp Loss", amp_loss.avg, global_step = epoch)
-        writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
+        if writer is not None:
+            writer.add_scalar("Test/Loss", loss.avg, global_step = epoch)
+            writer.add_scalar("Test/MSE Loss", mse_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/L1 Loss", l1_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/SSIM Loss", ssim_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/Amp Loss", amp_loss.avg, global_step = epoch)
+            writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
+
+    if dist.is_available() and dist.is_initialized():
+        loss_sum = torch.tensor(loss.sum, device=device)
+        loss_count = torch.tensor(loss.count, device=device)
+        dist.all_reduce(loss_sum, op=dist.ReduceOp.SUM)
+        dist.all_reduce(loss_count, op=dist.ReduceOp.SUM)
+        return (loss_sum / loss_count).item()
 
     return loss.avg
 
@@ -448,9 +458,8 @@ def main(argv):
         print("---------------------")
         args.epochs = 1
     else:
-        if not os.path.exists(model_dir): os.makedirs(model_dir)
-        if not os.path.exists(log_dir): os.makedirs(log_dir)
-        
+        os.makedirs(model_dir, exist_ok=True)
+        os.makedirs(log_dir, exist_ok=True)
 
     pol = "HH"
 
@@ -530,7 +539,7 @@ def main(argv):
     if args.size_check: print(net)
     net = net.to(device)
     if use_ddp:
-        net = torch.nn.parallel.DistributedDataParallel(
+        net = DistributedDataParallel(
             net,
             device_ids=[local_rank],
             output_device=local_rank,
@@ -577,10 +586,22 @@ def main(argv):
     if args.checkpoint:
         print(f"Loading checkpoint: {args.checkpoint}")
         checkpoint = torch.load(args.checkpoint, map_location=device)
+        
         if isinstance(checkpoint, dict) and "model" in checkpoint:
-            net.load_state_dict(checkpoint["model"])
+            state_dict = checkpoint["model"]
         else:
-            net.load_state_dict(checkpoint)
+            state_dict = checkpoint        
+
+        if any(k.startswith("module.") for k in state_dict):
+            print("-- Checkpoint was trained with DDP")
+            state_dict = {k.replace("module.", "", 1): v for k, v in state_dict.items()}
+
+        if isinstance(net, torch.nn.parallel.DistributedDataParallel):
+            print("-- Currently training with DDP")
+            net.module.load_state_dict(state_dict)
+        else:
+            print("-- Currently training without DDP")
+            net.load_state_dict(state_dict)
 
         if args.resume_optimizer and isinstance(checkpoint, dict) and "optimizer" in checkpoint:
             optimizer.load_state_dict(checkpoint["optimizer"])
@@ -605,6 +626,8 @@ def main(argv):
             global_step = checkpoint["global_step"]
 
     if args.size_check:
+        writer = None
+    elif use_ddp and dist.get_rank() != 0:
         writer = None
     else:
         writer = SummaryWriter(log_dir)
@@ -642,17 +665,22 @@ def main(argv):
             is_best = loss < best_loss
             best_loss = min(loss, best_loss)
 
-            checkpoint = {
-                "epoch": epoch,
-                "model": net.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "scheduler": scheduler.state_dict(),
-                "best_loss": best_loss,
-                "global_step": global_step,
-            }
+            if use_ddp:
+                dist.barrier()
 
-            if is_best:
+            if is_best and (not use_ddp or dist.get_rank() == 0):
+                checkpoint = {
+                    "epoch": epoch,
+                    "model": net.module.state_dict() if use_ddp else net.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
+                    "best_loss": best_loss,
+                    "global_step": global_step,
+                }
                 torch.save(checkpoint, os.path.join(model_dir, f"lambda_{args.lmbda}.pth.tar"))
+
+            if use_ddp:
+                dist.barrier()
 
             epoch_time = time.time() - start_time
             print(f"-- Time: {epoch_time:.1f} seconds")

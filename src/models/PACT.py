@@ -4,6 +4,7 @@ import torch.nn.functional as F
 import itertools
 import numpy as np
 import torch_dct as dct
+from torch.nn.parallel import DistributedDataParallel
 
 from src.models.base_aht import BB as basemodel
 from src.layers import PConvRB, conv2x2_down, deconv2x2_up, conv4x4_down, deconv4x4_up, conv3x3_same, deconv3x3_same
@@ -413,6 +414,9 @@ class h_s(nn.Module):
 
 def compute_group_energy(model, x):
     with torch.no_grad():
+        if isinstance(model, DistributedDataParallel):
+            model = model.module
+
         y = model.g_a(x)          # (1, M, H/16, W/16)
 
         # # Apply DCT here for testing
@@ -546,7 +550,8 @@ class PACTModel(basemodel):
               "shape": (H_z, W_z)  # spatial size of z
             }
         """
-        from src.entropy_models import ubransEncoder
+        # from src.entropy_models import ubransEncoder
+        from compressai.ans import BufferedRansEncoder as ubransEncoder
 
         # Make sure CDF tables are ready
         if self.quantized_cdf_y.numel() == 0 or self.quantized_cdf_z.numel() == 0:
@@ -615,7 +620,8 @@ class PACTModel(basemodel):
         Returns:
             {"x_hat": x_hat}  with x_hat in [0,1], shape (1,3,H,W)
         """
-        from src.entropy_models import ubransDecoder
+        # from src.entropy_models import ubransDecoder
+        from compressai.ans import RansDecoder as ubransDecoder
 
         self.eval()
         device = self.quantized_cdf_z.device

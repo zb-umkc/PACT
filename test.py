@@ -307,7 +307,7 @@ def load_checkpoint_compatible(model, checkpoint_path, device):
 #  CALCULATING kMACs
 # -------------------------------------------------------------
 def report_component_profiles(args=None, show_layers=False):
-    M,N = 256,192
+    M,N = 320,192
     H,W = 256,256
     denom = H*W*1000.0
 
@@ -389,7 +389,7 @@ def report_component_profiles(args=None, show_layers=False):
 
 
 def report_deepspeed_profile(args=None, show_layers=False):
-    M,N = 256,192
+    M,N = 320,192
     H,W = 256,256
     denom = H*W*1000.0
 
@@ -718,7 +718,7 @@ def main(argv):
 
     pol = "HH"
     if args.dataset == "nga":
-        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}/gt_{pol}"
+        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}/1024/gt_{pol}"
         args.min_val = -5000.0
         args.max_val = 5000.0
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")

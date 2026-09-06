@@ -54,6 +54,13 @@ public:
                 const py::array_t<int32_t> &cdfs,
                 const py::array_t<int32_t> &cdfs_sizes,
                 const py::array_t<int32_t> &offsets);
+  
+  void
+  decode_stream_into(const py::array_t<int32_t> &indexes,
+                     const py::array_t<int32_t> &cdfs,
+                     const py::array_t<int32_t> &cdfs_sizes,
+                     const py::array_t<int32_t> &offsets,
+                     py::array_t<int32_t> &output);
 
 private:
   Rans64State _rans;

@@ -172,7 +172,6 @@ py::bytes ubransEncoder::flush() {
 void ubransDecoder::set_stream(const std::string &encoded) {
   _stream = encoded;
   uint32_t *ptr = (uint32_t *)_stream.data();
-  // assert(ptr != nullptr);
   _ptr = ptr;
   Rans64DecInit(&_rans, &_ptr);
 }
@@ -185,8 +184,6 @@ py::array_t<int32_t> ubransDecoder::decode_stream(
   // assert(cdfs.shape()[0] == cdfs_sizes.shape()[0]);
 
   py::array_t<int32_t> output(indexes.shape()[0]);
-
-  // assert(_ptr != nullptr);
 
   for (int i = 0; i < static_cast<int>(indexes.shape()[0]); ++i) {
     const int32_t cdf_idx = indexes.at(i);
@@ -243,6 +240,56 @@ py::array_t<int32_t> ubransDecoder::decode_stream(
   return output;
 }
 
+void ubransDecoder::decode_stream_into(
+    const py::array_t<int32_t> &indexes,
+    const py::array_t<int32_t> &cdfs,
+    const py::array_t<int32_t> &cdfs_sizes,
+    const py::array_t<int32_t> &offsets,
+    py::array_t<int32_t> &output) {
+
+  for (int i = 0; i < static_cast<int>(indexes.shape()[0]); ++i) {
+    const int32_t cdf_idx = indexes.at(i);
+    const int32_t max_value = cdfs_sizes.at(cdf_idx) - 2;
+    const int32_t offset = offsets.at(cdf_idx);
+
+    const uint32_t cum_freq = Rans64DecGet(&_rans, precision);
+
+    const auto cdf_begin = cdfs.data() + cdfs.index_at(cdf_idx, 0);
+    const auto cdf_end = cdf_begin + cdfs_sizes.at(cdf_idx);
+    const auto it = std::find_if(
+        cdf_begin, cdf_end, [cum_freq](uint32_t v) { return v > cum_freq; });
+    const uint32_t s = std::distance(cdf_begin, it) - 1;
+
+    Rans64DecAdvance(&_rans, &_ptr, cdfs.at(cdf_idx, s),
+                     cdfs.at(cdf_idx, s + 1) - cdfs.at(cdf_idx, s), precision);
+
+    int32_t value = static_cast<int32_t>(s);
+
+    if (value == max_value) {
+      int32_t val = Rans64DecGetBits(&_rans, &_ptr, bypass_precision);
+      int32_t n_bypass = val;
+
+      while (val == max_bypass_val) {
+        val = Rans64DecGetBits(&_rans, &_ptr, bypass_precision);
+        n_bypass += val;
+      }
+
+      int32_t raw_val = 0;
+      for (int j = 0; j < n_bypass; ++j) {
+        val = Rans64DecGetBits(&_rans, &_ptr, bypass_precision);
+        raw_val |= val << (j * bypass_precision);
+      }
+      value = raw_val >> 1;
+      if (raw_val & 1) {
+        value = -value - 1;
+      } else {
+        value += max_value;
+      }
+    }
+    output.mutable_data()[i] = value + offset;
+  }
+}
+
 PYBIND11_MODULE(unbounded_ans, m) {
   m.attr("__name__") = "unbounded_ans";
 
@@ -256,5 +303,6 @@ PYBIND11_MODULE(unbounded_ans, m) {
   py::class_<ubransDecoder>(m, "ubransDecoder")
       .def(py::init<>())
       .def("set_stream", &ubransDecoder::set_stream)
-      .def("decode_stream", &ubransDecoder::decode_stream);
+      .def("decode_stream", &ubransDecoder::decode_stream)
+      .def("decode_stream_into", &ubransDecoder::decode_stream_into);
 }

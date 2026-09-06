@@ -129,38 +129,107 @@ class BB(nn.Module):
 
     # -------------------------------------------------------------
     # Low-level entropy coder helpers
-    # (used later in compress()/decompress() of AHT model)
+    # (used later in compress()/decompress() of PACT/AHT model)
     # -------------------------------------------------------------
-    @staticmethod
-    def compress_symbols(symbols, indexes, quantized_cdf, cdf_length, offset, encoder):
-        """
-        symbols, indexes: int tensors (B,C,H,W)
-        encoder: rANS encoder from repo.
-        """
-        encoder.encode_with_indexes(
-            symbols.reshape(-1).int().cpu().numpy(),
-            indexes.reshape(-1).int().cpu().numpy(),
-            quantized_cdf,
-            cdf_length,
-            offset,
-        )
-        return True
+
+    # @staticmethod
+    # def compress_symbols(symbols, indexes, quantized_cdf, cdf_length, offset, encoder):
+    #     """
+    #     symbols, indexes: int tensors (B,C,H,W)
+    #     encoder: rANS encoder from repo.
+    #     """
+    #     encoder.encode_with_indexes(
+    #         symbols.reshape(-1).int().cpu().numpy(),
+    #         indexes.reshape(-1).int().cpu().numpy(),
+    #         quantized_cdf,
+    #         cdf_length,
+    #         offset,
+    #     )
+    #     return True
 
     @staticmethod
-    def decompress_symbols(indexes, quantized_cdf, cdf_length, offset, decoder):
-        """
-        Inverse of compress_symbols.
-        """
-        values = decoder.decode_stream(
-            indexes.reshape(-1).int().cpu().numpy(),
-            quantized_cdf,
-            cdf_length,
-            offset,
+    def compress_symbols(symbols, indexes, quantized_cdf, cdf_length, offset, encoder):
+        # Convert to lists for CompressAI
+        cdfs_list = []
+        for i in range(len(cdf_length)):
+            length = cdf_length[i]
+            cdfs_list.append(quantized_cdf[i, :length].tolist())
+        
+        encoder.encode_with_indexes(
+            symbols.reshape(-1).int().cpu().numpy().tolist(),
+            indexes.reshape(-1).int().cpu().numpy().tolist(),
+            cdfs_list,
+            cdf_length.tolist(),
+            offset.tolist(),
         )
-        outputs = torch.tensor(
-            values, device=indexes.device, dtype=torch.float32
+
+    # @staticmethod
+    # def decompress_symbols(indexes, quantized_cdf, cdf_length, offset, decoder):
+    #     """
+    #     Inverse of compress_symbols.
+    #     """
+    #     values = decoder.decode_stream(
+    #         indexes.reshape(-1).int().cpu().numpy(),
+    #         quantized_cdf,
+    #         cdf_length,
+    #         offset,
+    #     )
+    #     outputs = torch.tensor(
+    #         values, device=indexes.device, dtype=torch.float32
+    #     ).reshape(indexes.size())
+    #     return outputs
+
+    @staticmethod
+    def decompress_symbols(indexes, quantized_cdf, cdf_length, offset, decoder):      
+        flat_indexes = indexes.reshape(-1).int().cpu().numpy().tolist()
+        
+        # Convert 2D numpy CDF array to list of lists as CompressAI expects
+        cdfs_list = []
+        for i in range(len(cdf_length)):
+            length = cdf_length[i]
+            cdfs_list.append(quantized_cdf[i, :length].tolist())
+        
+        cdf_length_list = cdf_length.tolist()
+        offset_list = offset.tolist()
+        
+        values = decoder.decode_stream(
+            flat_indexes,
+            cdfs_list,
+            cdf_length_list,
+            offset_list,
+        )
+        
+        return torch.tensor(
+            values,
+            device=indexes.device,
+            dtype=torch.float32
         ).reshape(indexes.size())
-        return outputs
+
+    # @staticmethod
+    # def decompress_symbols(indexes, quantized_cdf, cdf_length, offset, decoder):
+    #     import numpy as np
+        
+    #     flat = indexes.reshape(-1).int().cpu().numpy()
+    #     n = len(flat)
+        
+    #     # Pre-allocate output buffer on Python/numpy side
+    #     output = np.empty(n, dtype=np.int32)
+    #     output_pybind = output  # same memory
+        
+    #     # Decode directly into pre-allocated buffer — avoids C++ heap allocation
+    #     decoder.decode_stream_into(
+    #         flat,
+    #         quantized_cdf,
+    #         cdf_length,
+    #         offset,
+    #         output_pybind,
+    #     )
+        
+    #     return torch.tensor(
+    #         output,
+    #         device=indexes.device,
+    #         dtype=torch.float32
+    #     ).reshape(indexes.size())
 
     # -------------------------------------------------------------
     # Quantization helpers
