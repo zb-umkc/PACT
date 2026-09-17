@@ -237,9 +237,17 @@ class g_a(nn.Module):
 
         # ---------------- DCT Transform ----------------
         if self.latent_dct:
-            y = y.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
-            y = dct.dct(y, norm='ortho')    # (1, H/16, W/16, 320)
-            y = y.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+            # y = y.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
+            # y = dct.dct(y, norm='ortho')    # (1, H/16, W/16, 320)
+            # y = y.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+            if y.shape[1] % 8 != 0:
+                raise ValueError(f"Latent channels ({y.shape[1]}) must be divisible by 8")
+            y = y.permute(0, 2, 3, 1)       # (B, H/16, W/16, 320)
+            groups = y.shape[-1] // 8
+            y = y.reshape(*y.shape[:-1], 8, groups)
+            y = dct.dct(y, norm='ortho')    # DCT within each group of 40 channels
+            y = y.transpose(-2, -1).reshape(*y.shape[:-2], -1)
+            y = y.permute(0, 3, 1, 2)       # (B, 320, H/16, W/16)
 
         return y
 
@@ -275,9 +283,18 @@ class g_s(nn.Module):
     def forward(self, y_hat):
         # ---------------- DCT Transform ----------------
         if self.latent_dct:
-            y_hat = y_hat.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
-            y_hat = dct.idct(y_hat, norm='ortho')   # (1, H/16, W/16, 320)
-            y_hat = y_hat.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+            # y_hat = y_hat.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
+            # y_hat = dct.idct(y_hat, norm='ortho')   # (1, H/16, W/16, 320)
+            # y_hat = y_hat.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
+            if y_hat.shape[1] % 8 != 0:
+                raise ValueError(f"Latent channels ({y_hat.shape[1]}) must be divisible by 8")
+            y_hat = y_hat.permute(0, 2, 3, 1)       # (B, H/16, W/16, 320)
+            groups = y_hat.shape[-1] // 8
+            y_hat = y_hat.reshape(*y_hat.shape[:-1], groups, 8)
+            y_hat = y_hat.transpose(-2, -1)
+            y_hat = dct.idct(y_hat, norm='ortho')   # IDCT within each group of 40 channels
+            y_hat = y_hat.reshape(*y_hat.shape[:-2], -1)
+            y_hat = y_hat.permute(0, 3, 1, 2)       # (B, 320, H/16, W/16)
 
         x_hat = self.branch(y_hat)                  # (1, 320, H/16, W/16)
 

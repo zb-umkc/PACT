@@ -718,7 +718,7 @@ def main(argv):
 
     pol = "HH"
     if args.dataset == "nga":
-        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}/1024/gt_{pol}"
+        args.data_dir = f"/scratch/zb7df/data/{args.dataset}/{args.split}/gt_{pol}"
         args.min_val = -5000.0
         args.max_val = 5000.0
         print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")

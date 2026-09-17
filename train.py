@@ -1,4 +1,5 @@
 import argparse
+import csv
 import math
 import random
 import sys
@@ -389,6 +390,46 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
     return loss.avg
 
 
+def record_latent_statistics(epoch, val_dataloader, model, csv_path):
+    was_training = model.training
+    model.eval()
+    device = next(model.parameters()).device
+    latent_model = model.module if isinstance(model, DistributedDataParallel) else model
+
+    sum_y = None
+    sum_y2 = None
+    count = torch.zeros(1, device=device, dtype=torch.float64)
+
+    with torch.no_grad():
+        for d in val_dataloader:
+            y = latent_model.g_a(d.to(device)).to(torch.float64)
+            batch_sum = y.sum(dim=(0, 2, 3))
+            batch_sum2 = (y ** 2).sum(dim=(0, 2, 3))
+            sum_y = batch_sum if sum_y is None else sum_y + batch_sum
+            sum_y2 = batch_sum2 if sum_y2 is None else sum_y2 + batch_sum2
+            count += y.shape[0] * y.shape[2] * y.shape[3]
+
+    if dist.is_available() and dist.is_initialized():
+        dist.all_reduce(sum_y, op=dist.ReduceOp.SUM)
+        dist.all_reduce(sum_y2, op=dist.ReduceOp.SUM)
+        dist.all_reduce(count, op=dist.ReduceOp.SUM)
+
+    if not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0:
+        mean = sum_y / count
+        mean_square = sum_y2 / count
+        variance = mean_square - mean ** 2
+        file_exists = os.path.exists(csv_path)
+        with open(csv_path, "a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["epoch", "channel", "mean", "variance", "mean_square"])
+            for channel, values in enumerate(zip(mean, variance, mean_square)):
+                writer.writerow([epoch, channel, *(value.item() for value in values)])
+
+    if was_training:
+        model.train()
+
+
 def pad_to_multiple(img, k=64):
     if isinstance(img, torch.Tensor):
         # Tensor shape: (C, H, W)
@@ -632,6 +673,8 @@ def main(argv):
     else:
         writer = SummaryWriter(log_dir)
 
+    latent_stats_path = os.path.join(log_dir, "latent_statistics.csv")
+
     for epoch in range(last_epoch, (last_epoch + args.epochs)):
         start_time = time.time()
         if not args.size_check:
@@ -660,6 +703,9 @@ def main(argv):
             writer,
             args,
         )
+
+        if not args.size_check and args.architecture == "PACT" and (epoch == 0 or epoch % 50 == 49):
+            record_latent_statistics(epoch, val_dataloader, net, latent_stats_path)
 
         if not args.size_check:
             is_best = loss < best_loss
