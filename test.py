@@ -28,6 +28,10 @@ from skimage.exposure import match_histograms, adjust_gamma
 from src.models.PACT import compute_group_energy
 
 
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
+
+
 def pad(x, p=2 ** 6):
     h, w = x.size(2), x.size(3)
     H = (h + p - 1) // p * p
@@ -217,8 +221,6 @@ def compute_metrics(
         max_val: float,
         arch: str,
     ) -> Dict[str, Any]:
-
-    print(x.device, x_hat.device)
 
     metrics: Dict[str, Any] = {}
 
@@ -564,7 +566,6 @@ def test(args, profiles):
             x = load_image_nitf(img_path, min_val=args.min_val, max_val=args.max_val)
         else:
             x = load_image(img_path, min_val=args.min_val, max_val=args.max_val, arch=args.architecture)
-            print(x.shape)
 
         if args.adapt:
             I, Q = x[:, 0, :, :].squeeze(), x[:, 1, :, :].squeeze()
@@ -595,6 +596,55 @@ def test(args, profiles):
         # x_hat = crop(out_dec["x_hat"], (h,w))
         x_hat = out_dec["x_hat"]  # REMOVED CROP
 
+        # #########################################
+        # # Diagnostic
+        # with torch.no_grad():
+        #     # ---- Stage 1: does z round-trip exactly? ----
+        #     y = model.g_a(x)
+        #     z = model.h_a(y)
+        #     z_res_hat = torch.round(z - model.means_hyper)
+        #     z_hat_direct = z_res_hat + model.means_hyper
+
+        #     out_enc = model.compress(x)
+        #     out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
+
+        #     # Recompute z_hat the way decompress() does, by re-deriving mu/scales path
+        #     # (adjust names if your decompress() exposes z_hat differently)
+        #     z_hat_from_decode = out_dec.get("z_hat", None)
+        #     if z_hat_from_decode is not None:
+        #         print("z_hat diff:", (z_hat_direct - z_hat_from_decode).abs().max().item())
+        #     else:
+        #         print("z_hat not exposed by decompress() — add it to the returned dict temporarily")
+
+        #     # ---- Stage 2: mu/scales from z_hat_direct vs whatever decompress used ----
+        #     mu_direct, scales_direct = model.h_s(z_hat_direct)
+        #     mu_dec, scales_dec = out_dec.get("mu", None), out_dec.get("scales", None)
+        #     if mu_dec is not None:
+        #         print("mu diff:", (mu_direct - mu_dec).abs().max().item())
+        #         print("scales diff:", (scales_direct - scales_dec).abs().max().item())
+
+        #     # ---- Stage 3: symbols actually encoded vs decoded ----
+        #     y_res = torch.round(y - mu_direct)          # what SHOULD be encoded
+        #     y_res_hat = out_dec.get("y_res_hat", None)  # what decoder actually produced
+        #     if y_res_hat is not None:
+        #         symbol_diff = (y_res - y_res_hat).abs()
+        #         print("symbol diff (should be exactly 0):", symbol_diff.max().item())
+        #         print("num mismatched symbols:", (symbol_diff > 0).sum().item(), "/", y_res.numel())
+
+        #         # If mismatched, check WHERE they are — DC band or high-freq band?
+        #         mismatched = (symbol_diff > 0).float()
+        #         for band in range(40):
+        #             idx = slice(band*8, (band+1)*8)  # adjust to your interleaving
+        #             frac = mismatched[:, idx].mean().item()
+        #             if frac > 0:
+        #                 print(f"  band {band}: {frac*100:.2f}% symbols mismatched, "
+        #                     f"y_res range there: [{y_res[:, idx].min().item():.1f}, {y_res[:, idx].max().item():.1f}]")
+
+        #         mismatched_idx = (symbol_diff > 0).nonzero()
+        #         print(mismatched_idx)
+        #         print("Total symbols:", y_res.numel())
+        # #########################################
+
         if args.adapt:
             x_hat = x_hat.cpu().numpy()
             I_hat, Q_hat = sandia2nga_inverse(
@@ -607,13 +657,6 @@ def test(args, profiles):
         # save_rec = x_hat.clamp(0,1).float().cpu().squeeze(0).permute(1,2,0).numpy()
         # np.save(f"recon/{img_name}", save_rec)
 
-        # metrics = compute_metrics(x, x_hat, mode="iq") # Calculate in I/Q format
-        print(f"Min Val: {args.min_val}, Max Val: {args.max_val}")
-        print(f"x min: {x.min()}, x max: {x.max()}")
-        print(f"x_hat min: {x_hat.min()}, x_hat max: {x_hat.max()}")
-        # print(f"-- 1: {x_hat[:, 0, :, :].min()}, {x_hat[:, 0, :, :].max()}")
-        # print(f"-- 2: {x_hat[:, 1, :, :].min()}, {x_hat[:, 1, :, :].max()}")
-        # print(f"-- 3: {x_hat[:, 2, :, :].min()}, {x_hat[:, 2, :, :].max()}")
         metrics = compute_metrics(x, x_hat, args.min_val, args.max_val, arch=args.architecture)
 
         # msssim = ms_ssim(x_hat, x, data_range=1.0)

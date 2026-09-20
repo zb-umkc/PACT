@@ -507,6 +507,7 @@ class PACTModel(basemodel):
             )
 
         # ---------------- Hyper decoder (AHT) ----------------
+        z_hat = z_hat.contiguous()  # Ensure contiguous memory layout
         mu, scales = self.h_s(z_hat)  # per-channel μ, α for y
 
         # ---------------- Quantize y around μ ----------------
@@ -603,6 +604,7 @@ class PACTModel(basemodel):
             z_hat = z_res_hat + self.means_hyper
 
             # --------- Hyper decoder: get mu, scales for y ----------
+            z_hat = z_hat.contiguous()  # Ensure contiguous memory layout
             mu, scales = self.h_s(z_hat)   # both (1, M, H/16, W/16)
 
             # --------- Main latents y: residual around mu ----------
@@ -670,6 +672,7 @@ class PACTModel(basemodel):
             z_hat = z_res_hat + self.means_hyper
 
             # --------- Hyper decoder: get mu, scales for y ----------
+            z_hat = z_hat.contiguous()  # Ensure contiguous memory layout
             mu, scales = self.h_s(z_hat)  # (1, M, H/16, W/16)
 
             # --------- Decode main latents y ----------
@@ -690,4 +693,10 @@ class PACTModel(basemodel):
             # --------- Synthesis transform ----------
             x_hat = self.g_s(y_hat).clamp_(0.0, 1.0)
 
-        return {"x_hat": x_hat}
+        return {
+            "x_hat": x_hat,
+            "z_hat": z_hat,
+            "y_res_hat": y_res_hat,
+            "mu": mu,
+            "scales": scales,
+        }
