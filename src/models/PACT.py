@@ -208,12 +208,13 @@ class GConv(nn.Module):
 # Analysis transform g_a  (FastNIC-style, Fig. 2)
 # -------------------------------------------------------------
 class g_a(nn.Module):
-    def __init__(self, dataset: str, M: int = 320, G: int = 4, latent_dct=False):
+    def __init__(self, dataset: str, M: int = 320, G: int = 4, latent_dct=False, latent_dct_grps=1):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
         self.latent_dct = latent_dct
+        self.latent_dct_grps = latent_dct_grps
 
         self.branch = nn.Sequential(
             # (B, C, H, W) --> (B, C*b*b, H/b, W/b) = (B, 32, 64, 64)
@@ -237,15 +238,15 @@ class g_a(nn.Module):
 
         # ---------------- DCT Transform ----------------
         if self.latent_dct:
-            # y = y.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
-            # y = dct.dct(y, norm='ortho')    # (1, H/16, W/16, 320)
-            # y = y.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
-            if y.shape[1] % 8 != 0:
-                raise ValueError(f"Latent channels ({y.shape[1]}) must be divisible by 8")
+            if self.latent_dct_grps <= 0 or y.shape[1] % self.latent_dct_grps != 0:
+                raise ValueError(
+                    f"Latent channels ({y.shape[1]}) must be divisible by a positive "
+                    f"latent_dct_grps value ({self.latent_dct_grps})"
+                )
             y = y.permute(0, 2, 3, 1)       # (B, H/16, W/16, 320)
-            groups = y.shape[-1] // 8
-            y = y.reshape(*y.shape[:-1], 8, groups)
-            y = dct.dct(y, norm='ortho')    # DCT within each group of 40 channels
+            group_size = y.shape[-1] // self.latent_dct_grps
+            y = y.reshape(*y.shape[:-1], self.latent_dct_grps, group_size)
+            y = dct.dct(y, norm='ortho')
             y = y.transpose(-2, -1).reshape(*y.shape[:-2], -1)
             y = y.permute(0, 3, 1, 2)       # (B, 320, H/16, W/16)
 
@@ -256,12 +257,13 @@ class g_a(nn.Module):
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 320, latent_dct=False):
+    def __init__(self, M: int = 320, latent_dct=False, latent_dct_grps=1):
         super().__init__()
 
         mlp_ratio = 3
         partial_ratio = 4
         self.latent_dct = latent_dct
+        self.latent_dct_grps = latent_dct_grps
 
         self.branch = nn.Sequential(
             # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
@@ -283,16 +285,16 @@ class g_s(nn.Module):
     def forward(self, y_hat):
         # ---------------- DCT Transform ----------------
         if self.latent_dct:
-            # y_hat = y_hat.permute(0, 2, 3, 1)       # (1, H/16, W/16, 320)
-            # y_hat = dct.idct(y_hat, norm='ortho')   # (1, H/16, W/16, 320)
-            # y_hat = y_hat.permute(0, 3, 1, 2)       # (1, 320, H/16, W/16)
-            if y_hat.shape[1] % 8 != 0:
-                raise ValueError(f"Latent channels ({y_hat.shape[1]}) must be divisible by 8")
+            if self.latent_dct_grps <= 0 or y_hat.shape[1] % self.latent_dct_grps != 0:
+                raise ValueError(
+                    f"Latent channels ({y_hat.shape[1]}) must be divisible by a positive "
+                    f"latent_dct_grps value ({self.latent_dct_grps})"
+                )
             y_hat = y_hat.permute(0, 2, 3, 1)       # (B, H/16, W/16, 320)
-            groups = y_hat.shape[-1] // 8
-            y_hat = y_hat.reshape(*y_hat.shape[:-1], groups, 8)
+            group_size = y_hat.shape[-1] // self.latent_dct_grps
+            y_hat = y_hat.reshape(*y_hat.shape[:-1], group_size, self.latent_dct_grps)
             y_hat = y_hat.transpose(-2, -1)
-            y_hat = dct.idct(y_hat, norm='ortho')   # IDCT within each group of 40 channels
+            y_hat = dct.idct(y_hat, norm='ortho')
             y_hat = y_hat.reshape(*y_hat.shape[:-2], -1)
             y_hat = y_hat.permute(0, 3, 1, 2)       # (B, 320, H/16, W/16)
 
@@ -456,7 +458,7 @@ def compute_group_energy(model, x):
 # FINAL PACT MODEL
 # -------------------------------------------------------------
 class PACTModel(basemodel):
-    def __init__(self, dataset: str, M: int = 320, N: int = 192, G: int = 4, latent_dct=False):
+    def __init__(self, dataset: str, M: int = 320, N: int = 192, G: int = 4, latent_dct=False, latent_dct_grps=1):
         super().__init__(N)
         
         self.dataset = dataset
@@ -468,9 +470,10 @@ class PACTModel(basemodel):
             dataset=dataset,
             M=M,
             G=G,
-            latent_dct=latent_dct
+            latent_dct=latent_dct,
+            latent_dct_grps=latent_dct_grps,
         )
-        self.g_s = g_s(M=M, latent_dct=latent_dct)
+        self.g_s = g_s(M=M, latent_dct=latent_dct, latent_dct_grps=latent_dct_grps)
 
         self.h_a = h_a(M=M, N=N)
         self.h_s = h_s(M=M, N=N)

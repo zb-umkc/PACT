@@ -195,16 +195,21 @@ def main(argv):
     # Write results to CSV
     csv_filename = Path(__file__).parent.parent.parent / "results_bench.csv"
     date = datetime.now().strftime("%Y-%m-%d")
-    if "test" in args.dataset:
-        dataset = "test"
-    elif "validation" in args.dataset:
-        dataset = "val"
-    elif "full" in args.dataset:
-        dataset = "full"
+    dataset_path = args.dataset.lower()
+    dataset = "sandia" if "sandia" in dataset_path else "nga"
+    if "test" in dataset_path:
+        split = "test"
+    elif "validation" in dataset_path or "val" in dataset_path:
+        split = "val"
+    elif "full" in dataset_path:
+        split = "full"
+    else:
+        raise ValueError(f"Could not determine dataset split from path: {args.dataset}")
     
     fieldnames = [
         "codec",
         "dataset",
+        "split",
         "date",
         "qp",
         "bpp",
@@ -250,6 +255,7 @@ def main(argv):
             row = {
                 "codec": codec.name,
                 "dataset": dataset,
+                "split": split,
                 "date": date,
                 "qp": result_row.get("qp", ""),
                 "bpp": result_row.get("bpp", -1),

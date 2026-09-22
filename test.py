@@ -325,7 +325,8 @@ def report_component_profiles(args=None, show_layers=False):
         M=M,
         N=N,
         G=args.groups,
-        latent_dct=args.latent_dct
+        latent_dct=args.latent_dct,
+        latent_dct_grps=args.latent_dct_grps,
     ).eval()
 
     x = torch.randn(1, input_ch, H, W)
@@ -401,7 +402,8 @@ def report_deepspeed_profile(args=None, show_layers=False):
             dataset=args.dataset,
             M=M, N=N,
             G=args.groups,
-            latent_dct=args.latent_dct
+            latent_dct=args.latent_dct,
+            latent_dct_grps=args.latent_dct_grps,
         ).eval()
         input_ch = 2
     else:
@@ -514,7 +516,8 @@ def test(args, profiles):
             model = net(
                 dataset="nga",
                 G=args.groups,
-                latent_dct=args.latent_dct
+                latent_dct=args.latent_dct,
+                latent_dct_grps=args.latent_dct_grps,
             )
         else:
             net = importlib.import_module(".AHT", f'src.models').AHTModel
@@ -528,7 +531,8 @@ def test(args, profiles):
             model = net(
                 dataset=args.dataset,
                 G=args.groups,
-                latent_dct=args.latent_dct
+                latent_dct=args.latent_dct,
+                latent_dct_grps=args.latent_dct_grps,
             )
         else:
             net = importlib.import_module(".AHT", f'src.models').AHTModel
@@ -596,55 +600,6 @@ def test(args, profiles):
         # x_hat = crop(out_dec["x_hat"], (h,w))
         x_hat = out_dec["x_hat"]  # REMOVED CROP
 
-        # #########################################
-        # # Diagnostic
-        # with torch.no_grad():
-        #     # ---- Stage 1: does z round-trip exactly? ----
-        #     y = model.g_a(x)
-        #     z = model.h_a(y)
-        #     z_res_hat = torch.round(z - model.means_hyper)
-        #     z_hat_direct = z_res_hat + model.means_hyper
-
-        #     out_enc = model.compress(x)
-        #     out_dec = model.decompress(out_enc["strings"], out_enc["shape"])
-
-        #     # Recompute z_hat the way decompress() does, by re-deriving mu/scales path
-        #     # (adjust names if your decompress() exposes z_hat differently)
-        #     z_hat_from_decode = out_dec.get("z_hat", None)
-        #     if z_hat_from_decode is not None:
-        #         print("z_hat diff:", (z_hat_direct - z_hat_from_decode).abs().max().item())
-        #     else:
-        #         print("z_hat not exposed by decompress() — add it to the returned dict temporarily")
-
-        #     # ---- Stage 2: mu/scales from z_hat_direct vs whatever decompress used ----
-        #     mu_direct, scales_direct = model.h_s(z_hat_direct)
-        #     mu_dec, scales_dec = out_dec.get("mu", None), out_dec.get("scales", None)
-        #     if mu_dec is not None:
-        #         print("mu diff:", (mu_direct - mu_dec).abs().max().item())
-        #         print("scales diff:", (scales_direct - scales_dec).abs().max().item())
-
-        #     # ---- Stage 3: symbols actually encoded vs decoded ----
-        #     y_res = torch.round(y - mu_direct)          # what SHOULD be encoded
-        #     y_res_hat = out_dec.get("y_res_hat", None)  # what decoder actually produced
-        #     if y_res_hat is not None:
-        #         symbol_diff = (y_res - y_res_hat).abs()
-        #         print("symbol diff (should be exactly 0):", symbol_diff.max().item())
-        #         print("num mismatched symbols:", (symbol_diff > 0).sum().item(), "/", y_res.numel())
-
-        #         # If mismatched, check WHERE they are — DC band or high-freq band?
-        #         mismatched = (symbol_diff > 0).float()
-        #         for band in range(40):
-        #             idx = slice(band*8, (band+1)*8)  # adjust to your interleaving
-        #             frac = mismatched[:, idx].mean().item()
-        #             if frac > 0:
-        #                 print(f"  band {band}: {frac*100:.2f}% symbols mismatched, "
-        #                     f"y_res range there: [{y_res[:, idx].min().item():.1f}, {y_res[:, idx].max().item():.1f}]")
-
-        #         mismatched_idx = (symbol_diff > 0).nonzero()
-        #         print(mismatched_idx)
-        #         print("Total symbols:", y_res.numel())
-        # #########################################
-
         if args.adapt:
             x_hat = x_hat.cpu().numpy()
             I_hat, Q_hat = sandia2nga_inverse(
@@ -690,20 +645,21 @@ def test(args, profiles):
     model = args.run_name.split("/")[1]
     test_date = date.today().strftime("%Y%m%d")
 
-    # TODO: Clean this up
-    if "test/1024" in args.split:
-        results_filename = "results_highres.csv"
+    if "test_1024" in args.split:
+        results_filename = "results_1024.csv"
+    elif "test_256" in args.split:
+        results_filename = "results_256.csv"
     elif "full" in args.split:
         results_filename = "results_full.csv"
     else:
         results_filename = "results.csv"
 
-    fieldnames = ["arch", "model", "dataset", "lmbda", "test_date", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
+    fieldnames = ["arch", "model", "dataset", "test_date", "lmbda", "bpp", "psnr_iq", "msssim_iq", "psnr_amp", "sqnr_amp", 
                   "msssim_amp", "mae_phase", "mse_nrcs", "enc_time", "dec_time", 
                   "total_kmac_per_px", "enc_kmac_per_px", "dec_kmac_per_px", "ga_kmac_per_px", "ha_kmac_per_px", 
                   "gs_kmac_per_px", "hs_kmac_per_px", "total_params", "energy_1", "energy_2", "energy_3", "energy_4"]
     
-    write_data = {"arch": arch, "model": model, "dataset": args.dataset, "lmbda": args.lmbda, "test_date": test_date, 
+    write_data = {"arch": arch, "model": model, "dataset": args.dataset, "test_date": test_date, "lmbda": args.lmbda, 
                   "bpp": bpp_loss.avg, "psnr_iq": psnr_iq.avg, "msssim_iq": msssim_iq.avg, "psnr_amp": psnr_amp.avg, 
                   "sqnr_amp": sqnr_amp.avg, "msssim_amp": msssim_amp.avg, "mae_phase": mae_phase.avg, "mse_nrcs": mse_nrcs.avg,
                   "enc_time": enc_time.avg, "dec_time": dec_time.avg,
@@ -751,6 +707,7 @@ def parse_args(argv):
     parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
     parser.add_argument("--adapt", action="store_true", help="Adapt the model to the input data")
     parser.add_argument("--latent-dct", action="store_true", help="Apply DCT across latent channels")
+    parser.add_argument("--latent-dct-grps", type=int, default=1, help="Number of channel groups for the latent DCT")
     args = parser.parse_args(argv)
     return args
 

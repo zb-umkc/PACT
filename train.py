@@ -377,8 +377,8 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
             writer.add_scalar("Test/SSIM Loss", ssim_loss.avg, global_step = epoch)
             writer.add_scalar("Test/BPP Loss", bpp_loss.avg, global_step = epoch)
             writer.add_scalar("Test/EA Loss", ea_loss.avg, global_step = epoch)
-            writer.add_scalar("Train/Amp Loss", amp_loss.avg, global_step = epoch)
-            writer.add_scalar("Train/IQ Loss", iq_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/Amp Loss", amp_loss.avg, global_step = epoch)
+            writer.add_scalar("Test/IQ Loss", iq_loss.avg, global_step = epoch)
 
     if dist.is_available() and dist.is_initialized():
         loss_sum = torch.tensor(loss.sum, device=device)
@@ -478,6 +478,7 @@ def parse_args(argv):
     parser.add_argument("--iq-loss", type=str, default="l1_ssim", help="Distortion loss for I/Q component: mse or l1_ssim (default: %(default)s)")
     parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
     parser.add_argument("--latent-dct", action="store_true", help="Apply DCT across latent channels")
+    parser.add_argument("--latent-dct-grps", type=int, default=1, help="Number of channel groups for the latent DCT")
     args = parser.parse_args(argv)
     return args
 
@@ -572,7 +573,8 @@ def main(argv):
         net = importlib.import_module(".PACT", f'src.models').PACTModel(
             dataset=args.dataset,
             G=args.groups,
-            latent_dct=args.latent_dct
+            latent_dct=args.latent_dct,
+            latent_dct_grps=args.latent_dct_grps,
         )
     else:
         net = importlib.import_module(".AHT", f'src.models').AHTModel()
