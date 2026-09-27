@@ -233,8 +233,9 @@ class g_a(nn.Module):
             conv2x2_down(160, M),
         )
 
-    def forward(self, x):
+    def forward(self, x, return_nodct=False):
         y = self.branch(x)                  # (1, 320, H/16, W/16)
+        y_nodct = y.clone()
 
         # ---------------- DCT Transform ----------------
         if self.latent_dct:
@@ -250,6 +251,8 @@ class g_a(nn.Module):
             y = y.transpose(-2, -1).reshape(*y.shape[:-2], -1)
             y = y.permute(0, 3, 1, 2)       # (B, 320, H/16, W/16)
 
+        if return_nodct:
+            return y, y_nodct
         return y
 
 

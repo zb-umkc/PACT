@@ -29,6 +29,7 @@
     - `bash benchmark.sh test` (Use 'full', 'test', 'validation', or 'test2')
 12. Upload models to HF
     - `hf upload zb-umkc/aht /scratch/zb7df/models/aht/benchmarking ./benchmarking`
+    - `hf upload zb-umkc/sar-pact /scratch/zb7df/models/sar-pact .`
   
 ### Important Notes:
 - `train_test.sh` script contains 2-stage training process for I/Q and Amp loss

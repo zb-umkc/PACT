@@ -390,7 +390,8 @@ def val_epoch(epoch, val_dataloader, model, criterion, writer, args):
     return loss.avg
 
 
-def record_latent_statistics(epoch, val_dataloader, model, csv_path):
+def record_latent_statistics(epoch, val_dataloader, model, csv_path, csv_path_nodct,
+                               corr_csv_path, eigen_csv_path, cov_dir=None):
     was_training = model.training
     model.eval()
     device = next(model.parameters()).device
@@ -398,21 +399,43 @@ def record_latent_statistics(epoch, val_dataloader, model, csv_path):
 
     sum_y = None
     sum_y2 = None
+    sum_y_nodct = None
+    sum_y2_nodct = None
+    sum_yy_nodct = None  # NEW: (C, C) accumulator for covariance
     count = torch.zeros(1, device=device, dtype=torch.float64)
+    count_nodct = torch.zeros(1, device=device, dtype=torch.float64)
 
     with torch.no_grad():
         for d in val_dataloader:
-            y = latent_model.g_a(d.to(device)).to(torch.float64)
+            y, y_nodct = latent_model.g_a(d.to(device), return_nodct=True)
+            y = y.to(torch.float64)
+            y_nodct = y_nodct.to(torch.float64)
+
             batch_sum = y.sum(dim=(0, 2, 3))
             batch_sum2 = (y ** 2).sum(dim=(0, 2, 3))
             sum_y = batch_sum if sum_y is None else sum_y + batch_sum
             sum_y2 = batch_sum2 if sum_y2 is None else sum_y2 + batch_sum2
             count += y.shape[0] * y.shape[2] * y.shape[3]
 
+            batch_sum_nodct = y_nodct.sum(dim=(0, 2, 3))
+            batch_sum2_nodct = (y_nodct ** 2).sum(dim=(0, 2, 3))
+            sum_y_nodct = batch_sum_nodct if sum_y_nodct is None else sum_y_nodct + batch_sum_nodct
+            sum_y2_nodct = batch_sum2_nodct if sum_y2_nodct is None else sum_y2_nodct + batch_sum2_nodct
+            count_nodct += y_nodct.shape[0] * y_nodct.shape[2] * y_nodct.shape[3]
+
+            # NEW: accumulate X^T X for full covariance (needed for offset-correlation + PCA)
+            X = y_nodct.permute(0, 2, 3, 1).reshape(-1, y_nodct.shape[1])  # (N_pixels, C)
+            batch_sum_yy = X.T @ X  # (C, C)
+            sum_yy_nodct = batch_sum_yy if sum_yy_nodct is None else sum_yy_nodct + batch_sum_yy
+
     if dist.is_available() and dist.is_initialized():
         dist.all_reduce(sum_y, op=dist.ReduceOp.SUM)
         dist.all_reduce(sum_y2, op=dist.ReduceOp.SUM)
         dist.all_reduce(count, op=dist.ReduceOp.SUM)
+        dist.all_reduce(sum_y_nodct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(sum_y2_nodct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(count_nodct, op=dist.ReduceOp.SUM)
+        dist.all_reduce(sum_yy_nodct, op=dist.ReduceOp.SUM)  # NEW
 
     if not dist.is_available() or not dist.is_initialized() or dist.get_rank() == 0:
         mean = sum_y / count
@@ -425,6 +448,51 @@ def record_latent_statistics(epoch, val_dataloader, model, csv_path):
                 writer.writerow(["epoch", "channel", "mean", "variance", "mean_square"])
             for channel, values in enumerate(zip(mean, variance, mean_square)):
                 writer.writerow([epoch, channel, *(value.item() for value in values)])
+
+        mean_nodct = sum_y_nodct / count_nodct
+        mean_square_nodct = sum_y2_nodct / count_nodct
+        variance_nodct = mean_square_nodct - mean_nodct ** 2
+        file_exists = os.path.exists(csv_path_nodct)
+        with open(csv_path_nodct, "a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["epoch", "channel", "mean", "variance", "mean_square"])
+            for channel, values in enumerate(zip(mean_nodct, variance_nodct, mean_square_nodct)):
+                writer.writerow([epoch, channel, *(value.item() for value in values)])
+
+        # ---- NEW: build covariance matrix for y_nodct ----
+        C = mean_nodct.shape[0]
+        E_yyT = sum_yy_nodct / count_nodct  # broadcasts scalar count over (C,C)
+        cov = E_yyT - torch.outer(mean_nodct, mean_nodct)
+
+        diag = torch.diagonal(cov).clamp(min=1e-12)
+        corr = cov / torch.sqrt(diag.unsqueeze(0) * diag.unsqueeze(1))
+
+        # ---- Test 2/3: average correlation as a function of channel offset ----
+        max_offset = min(50, C - 1)
+        file_exists = os.path.exists(corr_csv_path)
+        with open(corr_csv_path, "a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["epoch", "offset", "avg_correlation"])
+            for offset in range(1, max_offset + 1):
+                avg_corr = torch.diagonal(corr, offset=offset).mean().item()
+                writer.writerow([epoch, offset, avg_corr])
+
+        # ---- Test 4: PCA / KLT eigenvalue spectrum ----
+        eigvals = torch.linalg.eigh(cov)[0].flip(0)  # descending order
+        file_exists = os.path.exists(eigen_csv_path)
+        with open(eigen_csv_path, "a", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            if not file_exists:
+                writer.writerow(["epoch", "component", "eigenvalue"])
+            for i, val in enumerate(eigvals):
+                writer.writerow([epoch, i, val.item()])
+
+        # Optional: save full covariance matrix per epoch for later heatmap visualization
+        if cov_dir is not None:
+            os.makedirs(cov_dir, exist_ok=True)
+            np.save(os.path.join(cov_dir, f"cov_epoch_{epoch}.npy"), cov.cpu().numpy())
 
     if was_training:
         model.train()
@@ -676,6 +744,10 @@ def main(argv):
         writer = SummaryWriter(log_dir)
 
     latent_stats_path = os.path.join(log_dir, "latent_statistics.csv")
+    latent_stats_nodct_path = os.path.join(log_dir, "latent_statistics_nodct.csv")
+    corr_path = os.path.join(log_dir, "latent_statistics_corr.csv")
+    eigen_path = os.path.join(log_dir, "latent_statistics_eigen.csv")
+    cov_dir = os.path.join(log_dir, "latent_statistics_cov")
 
     for epoch in range(last_epoch, (last_epoch + args.epochs)):
         start_time = time.time()
@@ -706,8 +778,18 @@ def main(argv):
             args,
         )
 
+        # Used during Latent DCT experimentation - turn off for final models
         if not args.size_check and args.architecture == "PACT" and (epoch == 0 or epoch % 50 == 49):
-            record_latent_statistics(epoch, val_dataloader, net, latent_stats_path)
+            record_latent_statistics(
+                epoch,
+                val_dataloader,
+                net,
+                latent_stats_path,
+                latent_stats_nodct_path,
+                corr_path,
+                eigen_path,
+                cov_dir,
+            )
 
         if not args.size_check:
             is_best = loss < best_loss
