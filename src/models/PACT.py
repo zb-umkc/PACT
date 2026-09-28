@@ -127,35 +127,51 @@ class PadLayer(nn.Module):
         return F.pad(x, self.padding, mode=self.mode, value=self.value)
 
 
+def _group_conv_layout(dataset, N, G):
+    if dataset == "nga":
+        indices = indices_nga_4x4
+        energy_props = energy_props_nga_4x4
+    elif dataset == "sandia":
+        indices = indices_sandia_4x4
+        energy_props = energy_props_sandia_4x4
+    else:
+        raise ValueError(f"Unknown dataset: {dataset}")
+
+    if G == 6:
+        return indices, [8, 8, 2, 8, 4, 2], [33, 29, 6, 8, 3, 1]
+
+    group_size = int(len(indices) / G)
+    groups_var = [energy_props[i:i + group_size] for i in range(0, len(energy_props), group_size)]
+    group_energy_var_props = [group.sum() for group in groups_var]
+    output_sizes = [int(round(prop * N)) for prop in group_energy_var_props]
+
+    for i in reversed(range(len(output_sizes))):
+        if output_sizes[i] == 0:
+            output_sizes[i] += 1
+        else:
+            break
+
+    difference = N - sum(output_sizes)
+    if difference >= 0:
+        output_sizes[0] += difference
+    else:
+        for i in reversed(range(len(output_sizes))):
+            if output_sizes[i] > 1:
+                output_sizes[i] -= 1
+                difference += 1
+                if difference >= 0:
+                    break
+
+    assert sum(output_sizes) == N, f"Sum of filters ({sum(output_sizes)}) does not equal N={N}"
+    return indices, [group_size] * G, output_sizes
+
+
 class GConv(nn.Module):
     def __init__(self, dataset: str, N=80, G=4):
         super().__init__()
         self.N = N
         self.G = G
-
-        if dataset == "nga":
-            indices = indices_nga_4x4
-            energy_props = energy_props_nga_4x4
-
-        elif dataset == "sandia":
-            indices = indices_sandia_4x4
-            energy_props = energy_props_sandia_4x4
-
-        else:
-            raise ValueError(f"Unknown dataset: {dataset}")
-
-        if self.G == 6:
-            self.N_p = [33, 29, 6, 8, 3, 1]
-            self.grp_sizes = [8, 8, 2, 8, 4, 2]
-        else:
-            group_size = int(len(indices) / self.G)
-            groups_var = [energy_props[i:i+group_size] for i in range(0, len(energy_props), group_size)]
-            group_energy_var_props = [group.sum() for group in groups_var]
-
-            self.N_p = [int(round(prop * self.N)) for prop in group_energy_var_props]
-            self.N_p = self.adjust_filters()
-            self.grp_sizes = [group_size] * self.G
-
+        indices, self.grp_sizes, self.N_p = _group_conv_layout(dataset, N, G)
         self.indices = torch.tensor(indices)
         self.convs = nn.ModuleList(
             [conv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.grp_sizes, self.N_p)]
@@ -178,29 +194,21 @@ class GConv(nn.Module):
 
         return x_out
     
-    def adjust_filters(self):
-        for i in reversed(range(len(self.N_p))):
-            if self.N_p[i] == 0:
-                self.N_p[i] += 1
-            else:
-                break
+class GConvInverse(nn.Module):
+    def __init__(self, dataset: str, N=80, G=4):
+        super().__init__()
+        self.N = N
+        self.G = G
+        indices, self.grp_sizes, self.N_p = _group_conv_layout(dataset, N, G)
+        self.inverse_indices = torch.argsort(torch.tensor(indices))
+        self.convs = nn.ModuleList(
+            [deconv3x3_same(in_ch, out_ch) for in_ch, out_ch in zip(self.N_p, self.grp_sizes)]
+        )
 
-        tot = sum(self.N_p)
-        if tot <= self.N:
-            diff = self.N - tot
-            self.N_p[0] += diff
-        else:
-            diff = tot - self.N
-            for j in reversed(range(len(self.N_p))):
-                if self.N_p[j] > 1:
-                    self.N_p[j] -= 1
-                    diff -= 1
-                    if diff <= 0:
-                        break
-
-        assert sum(self.N_p) == self.N, f"Sum of filters ({sum(self.N_p)}) does not equal N={self.N}"
-        
-        return self.N_p
+    def forward(self, x):
+        groups = torch.split(x, self.N_p, dim=1)
+        x_sorted = torch.cat([conv(group) for conv, group in zip(self.convs, groups)], dim=1)
+        return torch.index_select(x_sorted, dim=1, index=self.inverse_indices.to(x.device))
 
     
 
@@ -260,7 +268,7 @@ class g_a(nn.Module):
 # Synthesis transform g_s  (mirror of g_a, Fig. 2)
 # -------------------------------------------------------------
 class g_s(nn.Module):
-    def __init__(self, M: int = 320, latent_dct=False, latent_dct_grps=1):
+    def __init__(self, dataset: str, M: int = 320, G: int = 4, latent_dct=False, latent_dct_grps=1):
         super().__init__()
 
         mlp_ratio = 3
@@ -268,20 +276,33 @@ class g_s(nn.Module):
         self.latent_dct = latent_dct
         self.latent_dct_grps = latent_dct_grps
 
+        # Original
+        # self.branch = nn.Sequential(
+        #     deconv2x2_up(M, 160),
+        #     PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     deconv2x2_up(160, 80),
+        #     PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     deconv3x3_same(80, 32),
+        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     idctLayer(block_size=4),
+        # )
+
+        # Variation 1
         self.branch = nn.Sequential(
             # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
             deconv2x2_up(M, 160),
+
+            PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
             PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
             # (B, 160, H/8, W/8) --> (B, 80, H/4, W/4) = (B, 80, 64, 64)
             deconv2x2_up(160, 80),
-            PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
 
             # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-            deconv3x3_same(80, 32),
-            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            GConvInverse(dataset, N=80, G=G),
 
-            # (B, C*b*b, H/b, W/b) --> (B, C, H, W) = (B, 2, 256, 256)
+            # (B, 32, H/4, W/4) --> (B, 2, H, W) = (B, 2, 256, 256)
             idctLayer(block_size=4),
         )
 
@@ -476,7 +497,13 @@ class PACTModel(basemodel):
             latent_dct=latent_dct,
             latent_dct_grps=latent_dct_grps,
         )
-        self.g_s = g_s(M=M, latent_dct=latent_dct, latent_dct_grps=latent_dct_grps)
+        self.g_s = g_s(
+            dataset=dataset,
+            M=M,
+            G=G,
+            latent_dct=latent_dct,
+            latent_dct_grps=latent_dct_grps,
+        )
 
         self.h_a = h_a(M=M, N=N)
         self.h_s = h_s(M=M, N=N)

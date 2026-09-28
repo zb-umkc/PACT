@@ -2,17 +2,16 @@
 
 # Lambdas are scaled by 75 to approximate scale difference
 # between I/Q L1-SSIM Loss and Amplitude SQNR Loss
-# --checkpoint "/scratch/zb7df/models/sar-pact/g16_alpha0.01_dct8x8_N160/nga/lambda_${lmbda2}.pth.tar" \
 
 # For NGA data
 lambdas=(
-    "0.0008,0.0625"
-    "0.0017,0.125"
+    # "0.0008,0.0625"
+    # "0.0017,0.125"
     "0.0033,0.25"
-    "0.005,0.375"
-    "0.0067,0.5"
-    "0.0083,0.6225"
-    "0.01,0.75"
+    # "0.005,0.375"
+    # "0.0067,0.5"
+    # "0.0083,0.6225"
+    # "0.01,0.75"
 )
 
 # For Sandia data
@@ -39,15 +38,7 @@ for pair in "${lambdas[@]}"; do
         -e 250 \
         -bs 64 \
         --dataset "nga" \
-        --run-name "sar-pact/g8_alpha1.0_gamma1.0"
-
-    python test.py \
-        -a "PACT" \
-        --lambda "${lmbda1}" \
-        -d "nga" \
-        --split "full" \
-        -g "8" \
-        --run-name "sar-pact/g8_alpha1.0_gamma1.0"
+        --run-name "sar-pact/g8_alpha1.0_var1"
 
     # Phase 2: I/Q + Amplitude balance (alpha=0.01)
     echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
@@ -59,8 +50,8 @@ for pair in "${lambdas[@]}"; do
         -e 1000 \
         -bs 64 \
         --dataset "nga" \
-        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_gamma1.0/nga/lambda_${lmbda1}.pth.tar" \
-        --run-name "sar-pact/g8_alpha0.01_gamma1.0"
+        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_var1/nga/lambda_${lmbda1}.pth.tar" \
+        --run-name "sar-pact/g8_alpha0.01_var1"
 
     python test.py \
         -a "PACT" \
@@ -68,6 +59,6 @@ for pair in "${lambdas[@]}"; do
         -d "nga" \
         --split "full" \
         -g "8" \
-        --run-name "sar-pact/g8_alpha0.01_gamma1.0"
+        --run-name "sar-pact/g8_alpha0.01_var1"
 
 done
