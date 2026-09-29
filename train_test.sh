@@ -36,9 +36,9 @@ for pair in "${lambdas[@]}"; do
         --gamma 1.0 \
         -g "8" \
         -e 250 \
-        -bs 64 \
+        -bs 8 \
         --dataset "nga" \
-        --run-name "sar-pact/g8_alpha1.0_var1"
+        --run-name "sar-pact/g8_alpha1.0_orig"
 
     # Phase 2: I/Q + Amplitude balance (alpha=0.01)
     echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
@@ -48,10 +48,12 @@ for pair in "${lambdas[@]}"; do
         --gamma 1.0 \
         -g "8" \
         -e 1000 \
-        -bs 64 \
+        -bs 8 \
+        --reset-lr \
+        -lr 1e-4 \
         --dataset "nga" \
-        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_var1/nga/lambda_${lmbda1}.pth.tar" \
-        --run-name "sar-pact/g8_alpha0.01_var1"
+        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_orig/nga/lambda_${lmbda1}.pth.tar" \
+        --run-name "sar-pact/g8_alpha0.01_orig"
 
     python test.py \
         -a "PACT" \
@@ -59,6 +61,6 @@ for pair in "${lambdas[@]}"; do
         -d "nga" \
         --split "full" \
         -g "8" \
-        --run-name "sar-pact/g8_alpha0.01_var1"
+        --run-name "sar-pact/g8_alpha0.01_orig"
 
 done

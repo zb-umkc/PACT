@@ -277,34 +277,34 @@ class g_s(nn.Module):
         self.latent_dct_grps = latent_dct_grps
 
         # Original
-        # self.branch = nn.Sequential(
-        #     deconv2x2_up(M, 160),
-        #     PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     deconv2x2_up(160, 80),
-        #     PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     deconv3x3_same(80, 32),
-        #     PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-        #     idctLayer(block_size=4),
-        # )
-
-        # Variation 1
         self.branch = nn.Sequential(
-            # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
             deconv2x2_up(M, 160),
-
             PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-            PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-            PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
-
-            # (B, 160, H/8, W/8) --> (B, 80, H/4, W/4) = (B, 80, 64, 64)
             deconv2x2_up(160, 80),
-
-            # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
-            GConvInverse(dataset, N=80, G=G),
-
-            # (B, 32, H/4, W/4) --> (B, 2, H, W) = (B, 2, 256, 256)
+            PConvRB(80, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+            deconv3x3_same(80, 32),
+            PConvRB(32, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
             idctLayer(block_size=4),
         )
+
+        # # Variation 1
+        # self.branch = nn.Sequential(
+        #     # (B, M, H/16, W/16) --> (B, 160, H/8, W/8) = (B, 160, 32, 32)
+        #     deconv2x2_up(M, 160),
+
+        #     PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+        #     PConvRB(160, mlp_ratio=mlp_ratio, partial_ratio=partial_ratio),
+
+        #     # (B, 160, H/8, W/8) --> (B, 80, H/4, W/4) = (B, 80, 64, 64)
+        #     deconv2x2_up(160, 80),
+
+        #     # (B, 80, H/4, W/4) --> (B, 32, H/4, W/4) = (B, 32, 64, 64)
+        #     GConvInverse(dataset, N=80, G=G),
+
+        #     # (B, 32, H/4, W/4) --> (B, 2, H, W) = (B, 2, 256, 256)
+        #     idctLayer(block_size=4),
+        # )
 
     def forward(self, y_hat):
         # ---------------- DCT Transform ----------------
