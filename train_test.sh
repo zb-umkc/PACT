@@ -5,13 +5,13 @@
 
 # For NGA data
 lambdas=(
-    # "0.0008,0.0625"
-    # "0.0017,0.125"
+    "0.0008,0.0625"
+    "0.0017,0.125"
     "0.0033,0.25"
-    # "0.005,0.375"
-    # "0.0067,0.5"
-    # "0.0083,0.6225"
-    # "0.01,0.75"
+    "0.005,0.375"
+    "0.0067,0.5"
+    "0.0083,0.6225"
+    "0.01,0.75"
 )
 
 # For Sandia data
@@ -38,7 +38,7 @@ for pair in "${lambdas[@]}"; do
         -e 250 \
         -bs 8 \
         --dataset "nga" \
-        --run-name "sar-pact/g8_alpha1.0_orig"
+        --run-name "sar-pact/g8_egh_alpha1.0"
 
     # Phase 2: I/Q + Amplitude balance (alpha=0.01)
     echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
@@ -52,8 +52,8 @@ for pair in "${lambdas[@]}"; do
         --reset-lr \
         -lr 1e-4 \
         --dataset "nga" \
-        --checkpoint "/scratch/zb7df/models/sar-pact/g8_alpha1.0_orig/nga/lambda_${lmbda1}.pth.tar" \
-        --run-name "sar-pact/g8_alpha0.01_orig"
+        --checkpoint "/scratch/zb7df/models/sar-pact/g8_egh_alpha1.0/nga/lambda_${lmbda1}.pth.tar" \
+        --run-name "sar-pact/g8_egh_alpha0.01"
 
     python test.py \
         -a "PACT" \
@@ -61,6 +61,6 @@ for pair in "${lambdas[@]}"; do
         -d "nga" \
         --split "full" \
         -g "8" \
-        --run-name "sar-pact/g8_alpha0.01_orig"
+        --run-name "sar-pact/g8_egh_alpha0.01"
 
 done

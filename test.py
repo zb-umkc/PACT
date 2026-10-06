@@ -25,7 +25,7 @@ from ptflops import get_model_complexity_info
 import sarpy.io.general.nitf as nitf
 from skimage.exposure import match_histograms, adjust_gamma
 
-from src.models.PACT import compute_group_energy
+from src.models.PACT import compute_group_energy, compute_ga_channel_variances
 
 
 torch.backends.cudnn.deterministic = True
@@ -546,6 +546,12 @@ def test(args, profiles):
     model = load_checkpoint_compatible(model, ckpt_path, device)
     model.update(get_scale_table(0.12, 64, args.num))
     model = model.to(device)
+    log_dir = os.path.join(
+        "/scratch/zb7df/logs/",
+        args.run_name,
+        args.dataset,
+        f"lambda_{args.lmbda}",
+    )
 
     bpp_loss = AverageMeter()
     psnr_iq = AverageMeter()
@@ -565,7 +571,7 @@ def test(args, profiles):
     energy_3 = AverageMeter()
     energy_4 = AverageMeter()
 
-    for img_path in tqdm(sorted(images_list)):
+    for image_index, img_path in enumerate(tqdm(sorted(images_list))):
         if img_path.endswith("nitf"):
             x = load_image_nitf(img_path, min_val=args.min_val, max_val=args.max_val)
         else:
@@ -585,6 +591,18 @@ def test(args, profiles):
         torch.cuda.synchronize()
         enc_start = time.time()
         with torch.no_grad():
+            if image_index == 0 and args.architecture == "PACT":
+                channel_variances = compute_ga_channel_variances(model, x)
+                os.makedirs(log_dir, exist_ok=True)
+                energy_csv_path = os.path.join(log_dir, "ga_channel_energies.csv")
+                with open(energy_csv_path, "w", newline="") as csv_file:
+                    writer = csv.writer(csv_file)
+                    writer.writerow(["image", "layer", "channel", "energy"])
+                    writer.writerows(
+                        (img_name, layer, channel, variance)
+                        for layer, channel, variance in channel_variances
+                    )
+
             energies = compute_group_energy(model, x) # REMOVED PAD
             # print("---- Group Energy:", energies)
             out_enc = model.compress(x) # REMOVED PAD
