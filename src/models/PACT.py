@@ -483,8 +483,6 @@ class h_a(nn.Module):
         super().__init__()
         if M % G != 0:
             raise ValueError(f"M={M} must be divisible by G={G}")
-        if num_pconv not in (1, 2):
-            raise ValueError("num_pconv must be 1 or 2")
 
         self.M = M
         self.N = N
@@ -529,8 +527,6 @@ class h_s(nn.Module):
         super().__init__()
         if M % G != 0:
             raise ValueError(f"M={M} must be divisible by G={G}")
-        if num_pconv not in (1, 2):
-            raise ValueError("num_pconv must be 1 or 2")
 
         self.M = M
         self.N = N
@@ -662,8 +658,8 @@ class PACTModel(basemodel):
             latent_dct_grps=latent_dct_grps,
         )
 
-        self.h_a = h_a(M=M, N=N)
-        self.h_s = h_s(M=M, N=N)
+        self.h_a = h_a(M=M, N=N, num_pconv=1)
+        self.h_s = h_s(M=M, N=N, num_pconv=1)
 
     def split_groups(self, tensor):
         B, C, H, W = tensor.shape
