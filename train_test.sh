@@ -5,56 +5,57 @@
 
 # For NGA data
 lambdas=(
-    "0.0008,0.0625"
-    "0.0017,0.125"
-    "0.0033,0.25"
+#     "0.0008,0.0625"
+#     "0.0017,0.125"
+#     "0.0033,0.25"
     "0.005,0.375"
-    "0.0067,0.5"
-    "0.0083,0.6225"
-    "0.01,0.75"
+#     "0.0067,0.5"
+#     "0.0083,0.6225"
+#     "0.01,0.75"
 )
 
 # For Sandia data
 # lambdas=(
-    # "0.0008,0.0625"
-    # "0.0016,0.125"
-    # "0.0033,0.25"
-    # "0.0067,0.5"
-    # "0.0175,1.3125"
-    # "0.03,2.25"
+#     "0.0008,0.0625"
+#     "0.0016,0.125"
+#     "0.0033,0.25"
+#     "0.0067,0.5"
+#     "0.0175,1.3125"
+#     "0.03,2.25"
 # )
 
 # 8 Latent DCT Groups
 for pair in "${lambdas[@]}"; do
     IFS=',' read -r lmbda1 lmbda2 <<< "$pair"
 
-    # Phase 1: Optimize for I/Q only (alpha=1.0)
-    echo "PHASE 1: Lambda=${lmbda1} | Groups=8"
-    torchrun --nproc_per_node=4 train.py \
-        --lambda "${lmbda1}" \
-        --alpha 1.0 \
-        --gamma 1.0 \
-        -g "8" \
-        -e 250 \
-        -bs 4 \
-        --dataset "nga" \
-        --run-name "sar-pact/g8_egh_alpha1.0_bs16"
+    # # Phase 1: Optimize for I/Q only (alpha=1.0)
+    # echo "PHASE 1: Lambda=${lmbda1} | Groups=8"
+    # torchrun --nproc_per_node=4 train.py \
+    #     --lambda "${lmbda1}" \
+    #     --alpha 1.0 \
+    #     --gamma 1.0 \
+    #     -g "8" \
+    #     -e 250 \
+    #     -bs 4 \
+    #     --dataset "sandia" \
+    #     --run-name "sar-pact/g8_egh_alpha1.0_bs16"
 
-    # Phase 2: I/Q + Amplitude balance (alpha=0.01)
-    echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
-    torchrun --nproc_per_node=4 train.py \
-        --lambda "${lmbda2}" \
-        --alpha 0.01 \
-        --gamma 1.0 \
-        -g "8" \
-        -e 1000 \
-        -bs 4 \
-        --reset-lr \
-        -lr 1e-4 \
-        --dataset "nga" \
-        --checkpoint "/scratch/zb7df/models/sar-pact/g8_egh_alpha1.0_bs16/nga/lambda_${lmbda1}.pth.tar" \
-        --run-name "sar-pact/g8_egh_alpha0.01_bs16"
+    # # Phase 2: I/Q + Amplitude balance (alpha=0.01)
+    # echo "PHASE 2: Lambda=${lmbda2} | Groups=8"
+    # torchrun --nproc_per_node=4 train.py \
+    #     --lambda "${lmbda2}" \
+    #     --alpha 0.01 \
+    #     --gamma 1.0 \
+    #     -g "8" \
+    #     -e 1000 \
+    #     -bs 4 \
+    #     --reset-lr \
+    #     -lr 1e-4 \
+    #     --dataset "sandia" \
+    #     --checkpoint "/scratch/zb7df/models/sar-pact/g8_egh_alpha1.0_bs16/sandia/lambda_${lmbda1}.pth.tar" \
+    #     --run-name "sar-pact/g8_egh_alpha0.01_bs16"
 
+    # Test: Full
     python test.py \
         -a "PACT" \
         --lambda "${lmbda2}" \
@@ -63,20 +64,22 @@ for pair in "${lambdas[@]}"; do
         -g "8" \
         --run-name "sar-pact/g8_egh_alpha0.01_bs16"
 
-    python test.py \
-        -a "PACT" \
-        --lambda "${lmbda2}" \
-        -d "nga" \
-        --split "test_1024" \
-        -g "8" \
-        --run-name "sar-pact/g8_egh_alpha0.01_bs16"
+    # # Test: 1024x1024
+    # python test.py \
+    #     -a "PACT" \
+    #     --lambda "${lmbda2}" \
+    #     -d "sandia" \
+    #     --split "test_1024" \
+    #     -g "8" \
+    #     --run-name "sar-pact/g8_egh_alpha0.01_bs16"
 
-    python test.py \
-        -a "PACT" \
-        --lambda "${lmbda2}" \
-        -d "nga" \
-        --split "test_256" \
-        -g "8" \
-        --run-name "sar-pact/g8_egh_alpha0.01_bs16"
+    # # Test: 256x256 (n=1000)
+    # python test.py \
+    #     -a "PACT" \
+    #     --lambda "${lmbda2}" \
+    #     -d "sandia" \
+    #     --split "test_256" \
+    #     -g "8" \
+    #     --run-name "sar-pact/g8_egh_alpha0.01_bs16"
 
 done

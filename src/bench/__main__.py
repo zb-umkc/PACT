@@ -88,12 +88,12 @@ def collect(
         print("No images found in the dataset directory")
         sys.exit(1)
 
-    if "NGA" in dataset:
+    if "nga" in dataset:
         print("NGA Dataset Detected")
         min_val = -5000.0
         max_val = 5000.0
         print(f"Min Val: {min_val}, Max Val: {max_val}")
-    elif "Sandia" in dataset:
+    elif "sandia" in dataset:
         print("Sandia Dataset Detected")
         min_val = -500.0
         max_val = 500.0
@@ -197,7 +197,11 @@ def main(argv):
     date = datetime.now().strftime("%Y-%m-%d")
     dataset_path = args.dataset.lower()
     dataset = "sandia" if "sandia" in dataset_path else "nga"
-    if "test" in dataset_path:
+    if "test_1024" in dataset_path:
+            split = "test_1024"
+    elif "test_256" in dataset_path:
+            split = "test_256"
+    elif "test" in dataset_path:
         split = "test"
     elif "validation" in dataset_path or "val" in dataset_path:
         split = "val"
