@@ -25,9 +25,6 @@ from ptflops import get_model_complexity_info
 import sarpy.io.general.nitf as nitf
 from skimage.exposure import match_histograms, adjust_gamma
 
-from src.models.PACT import compute_group_energy, compute_ga_channel_variances
-
-
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
@@ -305,6 +302,42 @@ def load_checkpoint_compatible(model, checkpoint_path, device):
     return model
 
 
+def get_model_module(architecture):
+    if architecture in ("PACT", "PACT_EGH"):
+        return importlib.import_module(f".{architecture}", "src.models")
+    if architecture == "AHT":
+        return importlib.import_module(".AHT", "src.models")
+    raise ValueError(f"Unknown architecture: {architecture}")
+
+
+def get_model_class(architecture):
+    module = get_model_module(architecture)
+    return module.AHTModel if architecture == "AHT" else module.PACTModel
+
+
+def build_model(args, M=None, N=None, dataset=None):
+    model_class = get_model_class(args.architecture)
+    if args.architecture == "PACT":
+        return model_class(
+            M=320 if M is None else M,
+            N=192 if N is None else N,
+            G=args.groups,
+        )
+    if args.architecture == "PACT_EGH":
+        return model_class(
+            dataset=dataset or args.dataset,
+            M=320 if M is None else M,
+            N=192 if N is None else N,
+            G=args.groups,
+            latent_dct=args.latent_dct,
+            latent_dct_grps=args.latent_dct_grps,
+        )
+    return model_class(
+        **({} if M is None else {"M": M}),
+        **({} if N is None else {"N": N}),
+    )
+
+
 # -------------------------------------------------------------
 #  CALCULATING kMACs
 # -------------------------------------------------------------
@@ -313,21 +346,12 @@ def report_component_profiles(args=None, show_layers=False):
     H,W = 256,256
     denom = H*W*1000.0
 
-    if args.architecture == "PACT":
-        net = importlib.import_module(".PACT", f'src.models').PACTModel
+    if args.architecture in ("PACT", "PACT_EGH"):
         input_ch = 2
     else:
-        net = importlib.import_module(".AHT", f'src.models').AHTModel
         input_ch = 3
 
-    model = net(
-        dataset=args.dataset,
-        M=M,
-        N=N,
-        G=args.groups,
-        latent_dct=args.latent_dct,
-        latent_dct_grps=args.latent_dct_grps,
-    ).eval()
+    model = build_model(args, M=M, N=N).eval()
 
     x = torch.randn(1, input_ch, H, W)
     y = torch.randn(1, M, H//16, W//16)
@@ -396,19 +420,11 @@ def report_deepspeed_profile(args=None, show_layers=False):
     H,W = 256,256
     denom = H*W*1000.0
 
-    if args.architecture == "PACT":
-        net = importlib.import_module(".PACT", f'src.models').PACTModel
-        model = net(
-            dataset=args.dataset,
-            M=M, N=N,
-            G=args.groups,
-            latent_dct=args.latent_dct,
-            latent_dct_grps=args.latent_dct_grps,
-        ).eval()
+    if args.architecture in ("PACT", "PACT_EGH"):
+        model = build_model(args, M=M, N=N).eval()
         input_ch = 2
     else:
-        net = importlib.import_module(".AHT", f'src.models').AHTModel
-        model = net(M=M, N=N).eval()
+        model = build_model(args, M=M, N=N).eval()
         input_ch = 3
 
     x_shape = (1, input_ch, H, W)
@@ -509,38 +525,17 @@ def test(args, profiles):
     assert len(images_list) > 0, f"No files found in {args.dataset}/{args.split}"
     images_list = [os.path.join(args.data_dir, f) for f in images_list if f.endswith('.npy')]
 
+    model_dataset = "nga" if args.adapt else args.dataset
     if args.adapt:
         nga_reference = np.load("/scratch/zb7df/data/nga/nga_reference.npy")
-        if args.architecture == "PACT":
-            net = importlib.import_module(".PACT", f'src.models').PACTModel
-            model = net(
-                dataset="nga",
-                G=args.groups,
-                latent_dct=args.latent_dct,
-                latent_dct_grps=args.latent_dct_grps,
-            )
-        else:
-            net = importlib.import_module(".AHT", f'src.models').AHTModel
-            model = net()
-
+        model = build_model(args, dataset=model_dataset)
         ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, "nga", f"lambda_{args.lmbda}.pth.tar")
 
     else:
-        if args.architecture == "PACT":
-            net = importlib.import_module(".PACT", f'src.models').PACTModel
-            model = net(
-                dataset=args.dataset,
-                G=args.groups,
-                latent_dct=args.latent_dct,
-                latent_dct_grps=args.latent_dct_grps,
-            )
-        else:
-            net = importlib.import_module(".AHT", f'src.models').AHTModel
-            model = net()
-
+        model = build_model(args, dataset=model_dataset)
         ckpt_path = os.path.join("/scratch/zb7df/models/", args.run_name, args.dataset, f"lambda_{args.lmbda}.pth.tar")
     
-    print(f"Instantiated model for dataset {model.dataset}")
+    print(f"Instantiated model for dataset {args.dataset}")
     print(f"Loading checkpoint from {ckpt_path}")
     model.eval()
     model = load_checkpoint_compatible(model, ckpt_path, device)
@@ -570,6 +565,7 @@ def test(args, profiles):
     energy_2 = AverageMeter()
     energy_3 = AverageMeter()
     energy_4 = AverageMeter()
+    model_module = get_model_module(args.architecture)
 
     for image_index, img_path in enumerate(tqdm(sorted(images_list))):
         if img_path.endswith("nitf"):
@@ -591,8 +587,8 @@ def test(args, profiles):
         torch.cuda.synchronize()
         enc_start = time.time()
         with torch.no_grad():
-            if image_index == 0 and args.architecture == "PACT":
-                channel_variances = compute_ga_channel_variances(model, x)
+            if image_index == 0 and args.architecture == "PACT_EGH":
+                channel_variances = model_module.compute_ga_channel_variances(model, x)
                 os.makedirs(log_dir, exist_ok=True)
                 energy_csv_path = os.path.join(log_dir, "ga_channel_energies.csv")
                 with open(energy_csv_path, "w", newline="") as csv_file:
@@ -603,7 +599,7 @@ def test(args, profiles):
                         for layer, channel, variance in channel_variances
                     )
 
-            energies = compute_group_energy(model, x) # REMOVED PAD
+            energies = model_module.compute_group_energy(model, x) # REMOVED PAD
             # print("---- Group Energy:", energies)
             out_enc = model.compress(x) # REMOVED PAD
         torch.cuda.synchronize()
@@ -721,7 +717,7 @@ def parse_args(argv):
     parser.add_argument("--split", type=str, default="validation", help="Data split for inference")
     parser.add_argument("--run-name", type=str, help="Experiment name in format [arch]/[config]")
     parser.add_argument("-num", "--num", type=int, default=60)
-    parser.add_argument("-a", "--architecture", type=str, default="PACT", help="Model architecture (PACT or AHT)")
+    parser.add_argument("-a", "--architecture", type=str, default="PACT", choices=("PACT", "PACT_EGH", "AHT"), help="Model architecture")
     parser.add_argument("-g", "--groups", type=int, default=8, help="Number of groups for GConv in g_a (default: %(default)s)")
     parser.add_argument("--adapt", action="store_true", help="Adapt the model to the input data")
     parser.add_argument("--latent-dct", action="store_true", help="Apply DCT across latent channels")

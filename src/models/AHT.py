@@ -335,7 +335,8 @@ class AHTModel(basemodel):
               "shape": (H_z, W_z)  # spatial size of z
             }
         """
-        from src.entropy_models import ubransEncoder
+        # from src.entropy_models import ubransEncoder
+        from compressai.ans import BufferedRansEncoder as ubransEncoder
 
         # Make sure CDF tables are ready
         if self.quantized_cdf_y.numel() == 0 or self.quantized_cdf_z.numel() == 0:
@@ -404,7 +405,8 @@ class AHTModel(basemodel):
         Returns:
             {"x_hat": x_hat}  with x_hat in [0,1], shape (1,3,H,W)
         """
-        from src.entropy_models import ubransDecoder
+        # from src.entropy_models import ubransDecoder
+        from compressai.ans import RansDecoder as ubransDecoder
 
         self.eval()
         device = self.quantized_cdf_z.device

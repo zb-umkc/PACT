@@ -23,7 +23,7 @@ from torch.utils.tensorboard import SummaryWriter
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 
-from src.models.PACT import compute_group_energy
+from models.PACT_EGH import compute_group_energy
 
 # 1. Tells PyTorch to auto-tune and find the fastest GPU math paths
 torch.backends.cudnn.benchmark = True

@@ -2,15 +2,15 @@
 
 for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
     echo "Lambda=${lmbda}"
-    python train.py \
-        -a AHT \
-        --lambda "${lmbda}" \
-        --alpha 1.0 \
-        --iq-loss mse \
-        -e 250 \
-        -bs 32 \
-        --dataset "sandia" \
-        --run-name "aht/benchmarking"
+    # python train.py \
+    #     -a AHT \
+    #     --lambda "${lmbda}" \
+    #     --alpha 1.0 \
+    #     --iq-loss mse \
+    #     -e 250 \
+    #     -bs 32 \
+    #     --dataset "sandia" \
+    #     --run-name "aht/benchmarking"
 
     # python test.py \
     #     --lambda "${lmbda}" \
@@ -28,6 +28,6 @@ for lmbda in 0.0018 0.0035 0.0067 0.013 0.025 0.0483; do
         --lambda "${lmbda}" \
         -a AHT \
         -d "sandia" \
-        --split "full" \
+        --split "test_256" \
         --run-name "aht/benchmarking"
 done
